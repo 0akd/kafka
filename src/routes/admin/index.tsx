@@ -1,11 +1,30 @@
 import { component$, useSignal } from '@builder.io/qwik';
-import { routeAction$, routeLoader$, Form, Link } from '@builder.io/qwik-city';
+import { routeAction$, routeLoader$, Form, Link, z } from '@builder.io/qwik-city';
 import { eq } from 'drizzle-orm';
 import { db } from '~/db';
 import { books } from '~/db/schema';
 
-// --- LOADER & ACTIONS (No changes needed here) ---
-export const useManagerLoader = routeLoader$(async ({ url }) => {
+// --- UPDATED LOADER: Check Authentication & Authorization ---
+export const useManagerLoader = routeLoader$(async ({ url, cookie, error, redirect }) => {
+  // 1. Get User Session
+  const userCookie = cookie.get('user_session');
+  
+  // 2. Check if user is logged in
+  if (!userCookie?.value) {
+    throw redirect(302, '/'); // Redirect to home/login if not logged in
+  }
+
+  const user = JSON.parse(userCookie.value);
+
+  // 3. CHECK EMAIL AUTHORIZATION (The key change)
+  const allowedEmails = ['atrikumar31@gmail.com', 'reboostify@gmail.com'];
+  
+  if (!allowedEmails.includes(user.email)) {
+    // If logged in but wrong email, show 403 Forbidden
+    throw error(403, 'Access Denied: You are not an admin.');
+  }
+
+  // --- If passed, continue loading data ---
   const allBooks = await db.select().from(books).all();
   const editId = url.searchParams.get('edit');
   let editingBook = null;
@@ -14,10 +33,22 @@ export const useManagerLoader = routeLoader$(async ({ url }) => {
     const result = await db.select().from(books).where(eq(books.id, Number(editId))).get();
     editingBook = result || null;
   }
-  return { allBooks, editingBook };
+  return { allBooks, editingBook, user }; // Return user data too if needed
 });
 
-export const useSaveBook = routeAction$(async (data) => {
+// --- ACTIONS (Security Check Added) ---
+// It is good practice to add the check here too, in case someone sends a POST request directly
+export const useSaveBook = routeAction$(async (data, { cookie, fail }) => {
+  const userCookie = cookie.get('user_session');
+  if (!userCookie?.value) return fail(401, { message: 'Unauthorized' });
+  
+  const user = JSON.parse(userCookie.value);
+  const allowedEmails = ['atrikumar31@gmail.com', 'reboostify@gmail.com'];
+
+  if (!allowedEmails.includes(user.email)) {
+    return fail(403, { message: 'Forbidden' });
+  }
+
   const priceInCents = Math.round(Number(data.price) * 100);
   const values = {
     title: data.title as string,
@@ -37,14 +68,24 @@ export const useSaveBook = routeAction$(async (data) => {
   return { success: true };
 });
 
-export const useDeleteBook = routeAction$(async (data) => {
+export const useDeleteBook = routeAction$(async (data, { cookie, fail }) => {
+  const userCookie = cookie.get('user_session');
+  if (!userCookie?.value) return fail(401, { message: 'Unauthorized' });
+
+  const user = JSON.parse(userCookie.value);
+  const allowedEmails = ['atrikumar31@gmail.com', 'reboostify@gmail.com'];
+
+  if (!allowedEmails.includes(user.email)) {
+    return fail(403, { message: 'Forbidden' });
+  }
+
   if (data.id) {
     await db.delete(books).where(eq(books.id, Number(data.id)));
   }
   return { success: true };
 });
 
-// --- UI COMPONENT ---
+// --- UI COMPONENT (No logical changes, just rendering) ---
 export default component$(() => {
   const loader = useManagerLoader();
   const saveAction = useSaveBook();
@@ -97,7 +138,6 @@ export default component$(() => {
                   <input name="price" type="number" step="0.01" value={formValues ? (formValues.price / 100).toFixed(2) : ''} required class="w-full p-2 border border-slate-200 rounded text-sm" />
                 </div>
                 
-                {/* --- CHANGED: Category is now an INPUT with Suggestions --- */}
                 <div>
                   <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Category</label>
                   <input 
@@ -108,7 +148,6 @@ export default component$(() => {
                     placeholder="Type or select..."
                     class="w-full p-2 border border-slate-200 rounded text-sm bg-white"
                   />
-                  {/* Suggestions list */}
                   <datalist id="categoryOptions">
                     <option value="engineering" />
                     <option value="advanced" />
