@@ -16,10 +16,8 @@ export const useBookDetail = routeLoader$(async ({ params, status }) => {
 });
 
 export default component$(() => {
-  // 1. Get the signal, but DO NOT destructure .value into a variable here!
   const bookSignal = useBookDetail();
 
-  // 2. Check the signal value directly
   if (!bookSignal.value) {
     return (
       <div class="min-h-screen flex flex-col items-center justify-center bg-slate-50">
@@ -42,12 +40,14 @@ export default component$(() => {
         <div class="grid grid-cols-1 md:grid-cols-2 gap-10 p-8 md:p-12">
           
           <div class="bg-slate-100 rounded-xl overflow-hidden shadow-inner flex items-center justify-center p-6 h-[500px]">
-            {/* 3. Use bookSignal.value directly in the JSX tags */}
-        <img 
-  src={bookSignal.value.coverUrl} 
-  alt={bookSignal.value.title} 
-  class="max-h-full object-contain shadow-2xl rounded-md hover:scale-105 transition-transform duration-500"
-/>
+            {/* FIXED: Width aur Height add kiya hai */}
+            <img 
+              src={bookSignal.value.coverUrl} 
+              alt={bookSignal.value.title} 
+              width={350}
+              height={500}
+              class="max-h-full object-contain shadow-2xl rounded-md hover:scale-105 transition-transform duration-500"
+            />
           </div>
 
           <div class="flex flex-col justify-center">
@@ -73,19 +73,18 @@ export default component$(() => {
               <span class="text-sm text-slate-400 font-medium mb-2">USD</span>
             </div>
 
- <div class="space-y-4">
+            <div class="space-y-4">
               <button class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-lg py-4 rounded-xl shadow-lg shadow-blue-200 transition-all active:scale-95">
                 Add to Cart
               </button>
               
               <div class="flex gap-4">
                 
-                {/* --- NEW: READ ONLINE BUTTON --- */}
-                {/* Only shows if pdfUrl exists in database */}
+                {/* --- READ ONLINE BUTTON --- */}
                 {bookSignal.value.pdfUrl && (
                   <Link 
                     href={`/read/${bookSignal.value.id}`}
-                    target="_blank" // Opens in new tab
+                    target="_blank" 
                     class="flex-1 bg-indigo-50 border-2 border-indigo-100 text-indigo-700 font-bold py-3 rounded-xl hover:bg-indigo-100 hover:border-indigo-200 transition-colors flex items-center justify-center gap-2"
                   >
                     <span>📖 Read Online</span>
