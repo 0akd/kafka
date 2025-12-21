@@ -25,9 +25,9 @@ export default component$(() => {
   // New signal to track "Saved" state
   const isSaved = useSignal(false);
 
+// eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track }) => {
     track(() => bookSignal.value);
-
     if (bookSignal.value) {
       const bookId = bookSignal.value.id;
       const savedPage = localStorage.getItem(`book_progress_${bookId}`);

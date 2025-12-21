@@ -1,5 +1,5 @@
 import { component$, useSignal } from '@builder.io/qwik';
-import { routeAction$, routeLoader$, Form, Link, z } from '@builder.io/qwik-city';
+import { routeAction$, routeLoader$, Form, Link } from '@builder.io/qwik-city';
 import { eq } from 'drizzle-orm';
 import { db } from '~/db';
 import { books } from '~/db/schema';
@@ -141,7 +141,8 @@ export default component$(() => {
                 <div>
                   <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Category</label>
                   <input 
-                    name="category" 
+                    name="category"
+                    // @ts-expect-error: list is a valid html attribute but missing in types
                     list="categoryOptions"
                     value={formValues?.category} 
                     required
@@ -193,7 +194,12 @@ export default component$(() => {
             {loader.value.allBooks.map((book) => (
               <div key={book.id} class="p-4 border-b border-slate-100 last:border-0 flex gap-4 items-center hover:bg-slate-50 transition-colors group">
                 <div class="w-12 h-16 shrink-0 bg-slate-200 rounded overflow-hidden">
-                    <img src={book.coverUrl} class="w-full h-full object-cover" />
+                  <img 
+                    src={book.coverUrl} 
+                    class="w-full h-full object-cover" 
+                    width={48} 
+                    height={64} 
+                  />
                 </div>
 
                 <div class="flex-grow">

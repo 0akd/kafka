@@ -43,11 +43,11 @@ export default component$(() => {
           
           <div class="bg-slate-100 rounded-xl overflow-hidden shadow-inner flex items-center justify-center p-6 h-[500px]">
             {/* 3. Use bookSignal.value directly in the JSX tags */}
-            <img 
-              src={bookSignal.value.coverUrl} 
-              alt={bookSignal.value.title} 
-              class="max-h-full object-contain shadow-2xl rounded-md hover:scale-105 transition-transform duration-500"
-            />
+        <img 
+  src={bookSignal.value.coverUrl} 
+  alt={bookSignal.value.title} 
+  class="max-h-full object-contain shadow-2xl rounded-md hover:scale-105 transition-transform duration-500"
+/>
           </div>
 
           <div class="flex flex-col justify-center">

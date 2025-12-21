@@ -31,8 +31,8 @@ export default component$(() => {
       document.body.appendChild(script);
 
       // 1. Define callback for Google
-      // @ts-ignore
-      window.handleGoogleCredential = (response: any) => {
+      // Use (window as any) to avoid TypeScript errors without using @ts-ignore
+      (window as any).handleGoogleCredential = (response: any) => {
         // Token ko hidden input mein daalo aur form submit karo
         const input = document.getElementById('google-token-input') as HTMLInputElement;
         const submitBtn = document.getElementById('google-submit-btn') as HTMLButtonElement;
@@ -45,24 +45,22 @@ export default component$(() => {
 
       // 2. Initialize Google Auth when script loads
       script.onload = () => {
-        // @ts-ignore
-        if (window.google) {
-           // @ts-ignore
-           window.google.accounts.id.initialize({
+        const google = (window as any).google;
+        
+        if (google) {
+           google.accounts.id.initialize({
              client_id: import.meta.env.PUBLIC_GOOGLE_CLIENT_ID,
-             callback: window.handleGoogleCredential,
+             callback: (window as any).handleGoogleCredential,
            });
 
            // A. Render Manual Button (Fallback)
-           // @ts-ignore
-           window.google.accounts.id.renderButton(
+           google.accounts.id.renderButton(
              document.getElementById("google-btn-container"),
              { theme: "outline", size: "large" } 
            );
 
            // B. Trigger One Tap Popup (Automatic)
-           // @ts-ignore
-           window.google.accounts.id.prompt();
+           google.accounts.id.prompt();
         }
       }
     }
@@ -88,7 +86,13 @@ export default component$(() => {
           // LOGGED IN STATE
           <div class="flex items-center gap-3 bg-white p-2 rounded-full shadow-lg border border-slate-100">
             {user.value.picture && (
-              <img src={user.value.picture} class="w-8 h-8 rounded-full" alt="User" />
+              <img 
+                src={user.value.picture} 
+                class="w-8 h-8 rounded-full" 
+                alt="User" 
+                width={32}
+                height={32}
+              />
             )}
             <span class="text-sm font-bold text-slate-700 hidden sm:block">
               {user.value.name}
@@ -143,7 +147,8 @@ export default component$(() => {
                            <img 
                              src={book.coverUrl} 
                              alt={book.title}
-                             width="200" height="300"
+                             width={200} 
+                             height={300}
                              class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
                            />
                          ) : (
