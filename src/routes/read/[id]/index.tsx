@@ -152,17 +152,26 @@ export default component$(() => {
         </Link>
       </div>
 
-      {/* PDF Viewer */}
-      <div class="flex-grow w-full h-full relative bg-slate-200">
-        <iframe
-          // Key change hone par iframe reload hoga aur sahi page par jump karega
-          key={currentPage.value}
-          src={pdfSrcWithPage}
-          class="w-full h-full border-0"
-          referrerPolicy="no-referrer"
-          title="PDF Viewer"
-        />
-      </div>
+{/* PDF Viewer */}
+<div class="flex-grow w-full h-full relative bg-slate-200">
+  {/* Chrome fix: Use object tag instead of iframe */}
+  <object
+    key={currentPage.value} // Re-mounts component to force page jump
+    data={pdfSrcWithPage}
+    type="application/pdf"
+    class="w-full h-full border-0"
+  >
+    {/* Fallback if PDF fails to load */}
+    <div class="flex items-center justify-center h-full">
+        <p class="text-slate-500">
+            PDF load nahi ho raha? 
+            <a href={bookSignal.value.pdfUrl} target="_blank" class="text-blue-600 underline ml-1">
+                Download karein
+            </a>
+        </p>
+    </div>
+  </object>
+</div>
       
     </div>
   );
