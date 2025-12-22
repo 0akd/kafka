@@ -1,14 +1,11 @@
 import { component$, useSignal, useVisibleTask$, noSerialize, useStore, $ } from '@builder.io/qwik';
 import { routeLoader$, routeAction$, Link, Form } from '@builder.io/qwik-city';
-// import type { PDFDocumentProxy } from 'pdfjs-dist'; // Optional
 
 // --- BACKEND LOGIC (Same as before) ---
-
 export const useSavePage = routeAction$(async (data, { cookie, fail }) => {
   const backendUrl = import.meta.env.PUBLIC_BACKEND_URL;
   const userCookie = cookie.get('user_session');
   if (!userCookie?.value) return fail(401, { message: 'Login required' });
-  
   const user = JSON.parse(userCookie.value);
   const payload = { userId: user.id, bookId: Number(data.bookId), page: Number(data.page) };
   try {
@@ -26,7 +23,6 @@ export const useSavePage = routeAction$(async (data, { cookie, fail }) => {
 export const useReaderData = routeLoader$(async ({ params, status, cookie }) => {
   const backendUrl = import.meta.env.PUBLIC_BACKEND_URL?.replace(/\/+$/, '');
   const bookId = Number(params.id);
-
   let bookData = null;
   try {
     const res = await fetch(`${backendUrl}/api/books/${bookId}`);
@@ -36,12 +32,9 @@ export const useReaderData = routeLoader$(async ({ params, status, cookie }) => 
   } catch {
     status(404); return null;
   }
-
   const originalPdfUrl = bookData?.pdfUrl || bookData?.pdf_url;
   if (!originalPdfUrl) return { error: 'No PDF available' };
-
   const proxyUrl = `${backendUrl}/api/proxy-pdf?url=${encodeURIComponent(originalPdfUrl)}`;
-
   let savedPage = 1;
   const userCookie = cookie.get('user_session');
   if (userCookie?.value) {
@@ -51,7 +44,6 @@ export const useReaderData = routeLoader$(async ({ params, status, cookie }) => 
       if (pRes.ok) savedPage = (await pRes.json()).page || 1;
     } catch {}
   }
-
   return { id: bookData.id, pdfUrl: proxyUrl, title: bookData.title, initialPage: savedPage };
 });
 
@@ -68,55 +60,47 @@ export default component$(() => {
   const canvasRef = useSignal<HTMLCanvasElement>();
   const containerRef = useSignal<HTMLDivElement>();
   
-  // Zoom State
-  const currentZoom = useSignal(1); // 1 = 100% zoom
+  // State for Pinch Logic
   const touchStartDist = useSignal(0);
-  const startZoom = useSignal(1);
+  const startWidth = useSignal(0);
+  const startHeight = useSignal(0);
+  const basePageWidth = useSignal(0); // To prevent zooming out too much
   
-  // PDF State store
   const pdfState = useStore<{ doc: any }>({ doc: undefined });
 
-  // --- RENDER LOGIC ---
+  // Render Page
   const renderPage = $(async (num: number) => {
     if (!pdfState.doc || !canvasRef.value || !containerRef.value) return;
 
     try {
         const page = await pdfState.doc.getPage(num);
-        
-        // 1. Container ki width nikalo
         const containerWidth = containerRef.value.clientWidth;
-        
-        // 2. High Resolution Render Setup
-        // Mobile par pixels sharp dikhane ke liye pixel ratio use karte hain
         const pixelRatio = window.devicePixelRatio || 1;
         
-        // Unscaled viewport se width nikalo
+        // Initial fit to width
         const unscaledViewport = page.getViewport({ scale: 1 });
+        const scale = (containerWidth - 20) / unscaledViewport.width; 
         
-        // Fit-to-width scale calculation (minus padding)
-        const displayScale = (containerWidth - 20) / unscaledViewport.width; 
-        
-        // Render scale ko pixelRatio se multiply karo for sharpness
-        const outputScale = displayScale * pixelRatio;
+        // Store base width for limits
+        const displayWidth = Math.floor(unscaledViewport.width * scale);
+        const displayHeight = Math.floor(unscaledViewport.height * scale);
+        basePageWidth.value = displayWidth;
 
+        // High Res Render (Render at 2x quality for better zoom clarity)
+        const outputScale = scale * pixelRatio * 2; 
         const viewport = page.getViewport({ scale: outputScale });
 
         const canvas = canvasRef.value;
         const context = canvas.getContext('2d');
 
         if (context) {
-            // Canvas ke internal pixels high res honge
-            canvas.width = Math.floor(viewport.width);
-            canvas.height = Math.floor(viewport.height);
+            // Internal Resolution (High Quality)
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
 
-            // Lekin CSS width/height fit-to-screen rahegi
-            canvas.style.width = `${Math.floor(viewport.width / pixelRatio)}px`;
-            canvas.style.height = `${Math.floor(viewport.height / pixelRatio)}px`;
-
-            // Transform reset karo naye page par
-            currentZoom.value = 1;
-            canvas.style.transform = `scale(1)`;
-            canvas.style.transformOrigin = `top center`;
+            // Display Size (CSS - Starts at fit-to-screen)
+            canvas.style.width = `${displayWidth}px`;
+            canvas.style.height = `${displayHeight}px`;
 
             await page.render({
                 canvasContext: context,
@@ -132,171 +116,150 @@ export default component$(() => {
     if (newPage >= 1 && newPage <= totalPages.value) {
         currentPage.value = newPage;
         renderPage(newPage);
+        // Reset scroll on page change
+        if(containerRef.value) containerRef.value.scrollTop = 0;
     }
   });
 
-  // --- TOUCH HANDLERS (PINCH TO ZOOM) ---
+  // --- NEW PINCH LOGIC (Direct Size Update) ---
   const handleTouchStart = $((e: TouchEvent) => {
-    if (e.touches.length === 2) {
-      // Do ungliyan hain, pinch shuru
-      const touch1 = e.touches[0];
-      const touch2 = e.touches[1];
-      // Pythagoras theorem to find distance between fingers
-      const dist = Math.hypot(touch1.clientX - touch2.clientX, touch1.clientY - touch2.clientY);
+    if (e.touches.length === 2 && canvasRef.value) {
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      
+      // Calculate initial distance
+      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
       touchStartDist.value = dist;
-      startZoom.value = currentZoom.value;
+      
+      // Capture current size
+      const rect = canvasRef.value.getBoundingClientRect();
+      startWidth.value = rect.width;
+      startHeight.value = rect.height;
     }
   });
 
   const handleTouchMove = $((e: TouchEvent) => {
-    if (e.touches.length === 2) {
-      // Default scroll rokne ke liye (optional, behavior depend karta hai)
-      e.preventDefault(); 
+    // 1 Finger: Let browser handle Pan/Scroll naturally
+    if (e.touches.length === 1) return;
 
-      const touch1 = e.touches[0];
-      const touch2 = e.touches[1];
-      const dist = Math.hypot(touch1.clientX - touch2.clientX, touch1.clientY - touch2.clientY);
-      
+    // 2 Fingers: Handle Zoom manually
+    if (e.touches.length === 2 && canvasRef.value && containerRef.value) {
+      e.preventDefault(); // Stop browser zoom
+
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+
       if (touchStartDist.value > 0) {
-        // New zoom = Old Zoom * (New Dist / Old Dist)
-        const zoomChange = dist / touchStartDist.value;
-        let newZoom = startZoom.value * zoomChange;
-
-        // Limits set karo: Min 0.5x (small), Max 4x (large)
-        if (newZoom < 0.5) newZoom = 0.5;
-        if (newZoom > 4) newZoom = 4;
-
-        currentZoom.value = newZoom;
+        const scaleFactor = currentDist / touchStartDist.value;
         
-        // CSS transform apply karo turant smooth experience ke liye
-        if (canvasRef.value) {
-            canvasRef.value.style.transform = `scale(${newZoom})`;
-            // Zoom out hone par center me rahe, zoom in par left align ho sakta hai
-            canvasRef.value.style.transformOrigin = newZoom < 1 ? 'center top' : 'center top'; 
+        // Calculate new dimensions
+        let newWidth = startWidth.value * scaleFactor;
+        let newHeight = startHeight.value * scaleFactor;
+
+        // Limit Zoom Out (Don't go smaller than screen width)
+        if (newWidth < basePageWidth.value) {
+             newWidth = basePageWidth.value;
+             newHeight = (basePageWidth.value / startWidth.value) * startHeight.value;
         }
+        // Limit Zoom In (Max 5x)
+        if (newWidth > basePageWidth.value * 5) return;
+
+        // Apply new size to CSS directly
+        // This forces the container to re-calculate scrollbars
+        const oldWidth = parseFloat(canvasRef.value.style.width || '0');
+        canvasRef.value.style.width = `${newWidth}px`;
+        canvasRef.value.style.height = `${newHeight}px`;
+
+        // --- SMART SCROLLING (Keep zoom centered) ---
+        // Find center of pinch relative to the container
+        const rect = containerRef.value.getBoundingClientRect();
+        const pinchCenterX = ((t1.clientX + t2.clientX) / 2) - rect.left + containerRef.value.scrollLeft;
+        const pinchCenterY = ((t1.clientY + t2.clientY) / 2) - rect.top + containerRef.value.scrollTop;
+
+        // Ratio of change
+        const ratio = newWidth / oldWidth;
+
+        // Adjust scroll to keep pinch center stable
+        if (ratio !== 1) {
+            containerRef.value.scrollLeft = (pinchCenterX * ratio) - (((t1.clientX + t2.clientX) / 2) - rect.left);
+            containerRef.value.scrollTop = (pinchCenterY * ratio) - (((t1.clientY + t2.clientY) / 2) - rect.top);
+        }
+        
+        // Update start values for smooth continuous pinch
+        touchStartDist.value = currentDist;
+        startWidth.value = newWidth;
+        startHeight.value = newHeight;
       }
     }
   });
 
-  const handleTouchEnd = $(() => {
-    touchStartDist.value = 0;
-  });
-
-  // --- INITIAL LOAD ---
   useVisibleTask$(async () => {
     if (!bookSignal.value?.pdfUrl || bookSignal.value.error) {
         loadError.value = bookSignal.value?.error || "No PDF URL found";
         isLoading.value = false;
         return;
     }
-
     try {
       const pdfjs = await import('pdfjs-dist');
       pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
-
       const loadingTask = pdfjs.getDocument(bookSignal.value.pdfUrl);
       const pdf = await loadingTask.promise;
-      
       pdfState.doc = noSerialize(pdf);
       totalPages.value = pdf.numPages;
-      
       await renderPage(currentPage.value);
       isLoading.value = false;
-
     } catch (error: any) {
       console.error("PDF Init Error:", error);
-      loadError.value = "Failed to load PDF. Check Proxy or URL.";
+      loadError.value = "Failed to load PDF.";
       isLoading.value = false;
     }
   });
 
-  // Add event listeners directly to container
+  // Attach Listeners
   useVisibleTask$(({ cleanup }) => {
     const el = containerRef.value;
     if (!el) return;
 
-    // Passive false is important to allow e.preventDefault()
+    // Use passive: false to allow preventDefault on 2-finger touch
     el.addEventListener('touchstart', handleTouchStart, { passive: false });
     el.addEventListener('touchmove', handleTouchMove, { passive: false });
-    el.addEventListener('touchend', handleTouchEnd);
-
+    
     cleanup(() => {
         el.removeEventListener('touchstart', handleTouchStart);
         el.removeEventListener('touchmove', handleTouchMove);
-        el.removeEventListener('touchend', handleTouchEnd);
     });
   });
 
-  if (loadError.value) {
-      return (
-          <div class="h-screen flex items-center justify-center bg-slate-900 text-red-400">
-             <div class="text-center">
-                <p class="mb-4">Error: {loadError.value}</p>
-                <Link href="/" class="underline text-white">Back Home</Link>
-             </div>
-          </div>
-      );
-  }
+  if (loadError.value) return <div>Error: {loadError.value}</div>;
 
   return (
     <div class="h-[100dvh] flex flex-col bg-slate-900 overflow-hidden">
-      
       {/* HEADER */}
       <div class="h-14 bg-slate-800 border-b border-slate-700 flex items-center justify-between px-3 shrink-0 z-20 shadow-md">
-        <div class="flex items-center gap-3">
-            <Link href="/" class="text-white text-lg">⬅</Link>
-            <div>
-                 <h2 class="text-white font-bold truncate max-w-[120px] text-sm">{bookSignal.value?.title}</h2>
-                 <p class="text-[10px] text-slate-400">Page {currentPage.value} of {totalPages.value}</p>
-            </div>
-        </div>
-
-        <div class="flex items-center gap-2">
-            <button onClick$={() => changePage(currentPage.value - 1)} disabled={currentPage.value <= 1} class="p-2 bg-slate-700 rounded text-white disabled:opacity-50">⬅</button>
-            
+        <Link href="/" class="text-white text-lg">⬅</Link>
+        <h2 class="text-white text-sm font-bold">{bookSignal.value?.title}</h2>
+        <div class="flex gap-2">
+            <button onClick$={() => changePage(currentPage.value - 1)} class="text-white px-2">⬅</button>
             <Form action={saveAction}>
                 <input type="hidden" name="bookId" value={bookSignal.value?.id} />
                 <input type="hidden" name="page" value={currentPage.value} />
-                <button type="submit" class="bg-blue-600 px-3 py-1.5 rounded text-white text-xs font-bold">Save</button>
+                <button class="bg-blue-600 px-2 rounded text-white text-xs py-1">Save</button>
             </Form>
-            
-            <button onClick$={() => changePage(currentPage.value + 1)} disabled={currentPage.value >= totalPages.value} class="p-2 bg-slate-700 rounded text-white disabled:opacity-50">➡</button>
+            <button onClick$={() => changePage(currentPage.value + 1)} class="text-white px-2">➡</button>
         </div>
       </div>
 
-      {/* READER CONTAINER */}
+      {/* SCROLLABLE CONTAINER */}
       <div 
         ref={containerRef} 
-        class="flex-grow w-full bg-slate-600 overflow-auto flex justify-center p-2 relative touch-pan-x touch-pan-y"
-        style={{
-             // Smooth transitions for zoom, but not during active pinch (handled in JS)
-             touchAction: 'none' // Important to handle pinch manually without browser interference
-        }}
+        class="flex-grow w-full bg-slate-600 overflow-auto relative touch-pan-x touch-pan-y"
       >
-        {isLoading.value && (
-             <div class="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/90 z-20 text-white">
-                 <div class="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-                 Loading...
-             </div>
-        )}
-        
-        {/* CANVAS WRAPPER (To maintain layout during scale) */}
-        <div style={{
-            transition: 'transform 0.1s ease-out', // Thoda smooth effect
-            width: 'fit-content',
-            height: 'fit-content'
-        }}>
-             <canvas ref={canvasRef} class="shadow-2xl bg-white block origin-top" />
+        {/* Canvas wrapper to ensure centering when smaller than screen */}
+        <div class="min-h-full min-w-full flex items-center justify-center p-2">
+             <canvas ref={canvasRef} class="shadow-2xl bg-white block" />
         </div>
-        
       </div>
-      
-      {/* ZOOM INDICATOR (Optional Overlay) */}
-      {currentZoom.value !== 1 && (
-          <div class="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/60 text-white px-2 py-1 rounded text-xs pointer-events-none z-30">
-              {Math.round(currentZoom.value * 100)}%
-          </div>
-      )}
     </div>
   );
 });
