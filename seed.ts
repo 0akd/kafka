@@ -1,4 +1,4 @@
-import { createClient } from '@libsql/client';
+import { createClient } from '@libsql/client/web';
 import { drizzle } from 'drizzle-orm/libsql';
 import { books } from './src/db/schema';
 // Ensure 'dotenv' is configured if you aren't running this via a runner that handles env vars
