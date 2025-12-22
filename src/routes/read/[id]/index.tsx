@@ -46,7 +46,7 @@ export const useReaderData = routeLoader$(async ({ params, status, cookie }) => 
   if (!originalPdfUrl) return { error: 'No PDF available' };
 
   // IMPORTANT: Yeh URL ab Step 1 wali file ko hit karega
-  const proxyUrl = `/api/proxy-pdf?url=${encodeURIComponent(originalPdfUrl)}`;
+const proxyUrl = `${backendUrl}/api/proxy-pdf?url=${encodeURIComponent(originalPdfUrl)}`;
 
   let savedPage = 1;
   const userCookie = cookie.get('user_session');
