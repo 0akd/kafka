@@ -1,7 +1,7 @@
 import { component$, useSignal, useVisibleTask$, noSerialize, useStore } from '@builder.io/qwik';
 import { routeLoader$, routeAction$, Link, Form } from '@builder.io/qwik-city';
 
-// --- BACKEND LOGIC (No Changes) ---
+// --- BACKEND LOGIC ---
 export const useSavePage = routeAction$(async (data, { cookie, fail }) => {
   const backendUrl = import.meta.env.PUBLIC_BACKEND_URL;
   const userCookie = cookie.get('user_session');
@@ -16,7 +16,8 @@ export const useSavePage = routeAction$(async (data, { cookie, fail }) => {
       body: JSON.stringify(payload),
     });
     return { success: true };
-  } catch (err) {
+  } catch {
+    // ✅ Fix 1: 'err' variable hata diya kyunki use nahi ho raha tha
     return fail(500, { message: 'Failed to save' });
   }
 });
@@ -47,7 +48,10 @@ export const useReaderData = routeLoader$(async ({ params, status, cookie }) => 
     try {
       const pRes = await fetch(`${backendUrl}/api/progress?userId=${user.id}&bookId=${bookId}`);
       if (pRes.ok) savedPage = (await pRes.json()).page || 1;
-    } catch {}
+    } catch {
+        // ✅ Fix 2: Empty block ke andar comment daala taaki linter khush rahe
+        // ignore error
+    }
   }
 
   return { id: bookData.id, pdfUrl: proxyUrl, title: bookData.title, initialPage: savedPage };
@@ -66,11 +70,10 @@ export default component$(() => {
   const canvasRef = useSignal<HTMLCanvasElement>();
   const containerRef = useSignal<HTMLDivElement>();
   
-  // ✅ FIX 1: null ki jagah undefined use karein
   const pdfState = useStore<{ doc: any }>({ doc: noSerialize(undefined) });
 
-  // ✅ FIX 2: PDF Logic ko Reactive banaya
-  // Pehle ye task PDF load karega
+  // ✅ Fix 3: Linter warning disable ki kyunki humein client-side rendering chahiye
+  // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
     if (!bookSignal.value?.pdfUrl) {
         loadError.value = "No PDF URL found";
@@ -87,7 +90,6 @@ export default component$(() => {
       
       pdfState.doc = noSerialize(pdf);
       totalPages.value = pdf.numPages;
-      // Note: Loading false yahan nahi karenge, render hone ke baad karenge
     } catch (error: any) {
       console.error("PDF Init Error:", error);
       loadError.value = error.message;
@@ -95,8 +97,8 @@ export default component$(() => {
     }
   });
 
-  // ✅ FIX 3: Rendering Logic ko alag task mein daala jo track() use karta hai
-  // Jab bhi 'currentPage' ya 'pdfState.doc' change hoga, ye chalega
+  // ✅ Fix 4: Linter warning disable ki
+  // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ track }) => {
     const pageNum = track(() => currentPage.value);
     const doc = track(() => pdfState.doc);
@@ -110,7 +112,6 @@ export default component$(() => {
         
         const containerWidth = container.clientWidth;
         const unscaledViewport = page.getViewport({ scale: 1 });
-        // Responsive scale calculation
         const scale = (containerWidth - 40) / unscaledViewport.width; 
         const viewport = page.getViewport({ scale: scale < 0.5 ? 0.5 : scale });
 
@@ -124,7 +125,7 @@ export default component$(() => {
                 viewport: viewport,
             }).promise;
             
-            isLoading.value = false; // Render complete hone par loading hatao
+            isLoading.value = false;
         }
     } catch (e) {
         console.error("Render Error:", e);
@@ -154,7 +155,6 @@ export default component$(() => {
         </div>
 
         <div class="flex items-center gap-2">
-            {/* Buttons ab seedha signal update karte hain */}
             <button 
                 onClick$={() => {
                     if (currentPage.value > 1) currentPage.value--;
