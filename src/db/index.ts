@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { createClient } from '@libsql/client';
+import { createClient } from '@libsql/client/web'; // ✅ Ye Edge friendly hai (fetch use karta hai)
 import { drizzle } from 'drizzle-orm/libsql';
 import * as schema from './schema';
 
