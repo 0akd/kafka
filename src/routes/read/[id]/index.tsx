@@ -249,17 +249,21 @@ export default component$(() => {
             <button onClick$={() => changePage(currentPage.value + 1)} class="text-white px-2">➡</button>
         </div>
       </div>
-
-      {/* SCROLLABLE CONTAINER */}
-      <div 
-        ref={containerRef} 
-        class="flex-grow w-full bg-slate-600 overflow-auto relative touch-pan-x touch-pan-y"
-      >
-        {/* Canvas wrapper to ensure centering when smaller than screen */}
-        <div class="min-h-full min-w-full flex items-center justify-center p-2">
-             <canvas ref={canvasRef} class="shadow-2xl bg-white block" />
-        </div>
-      </div>
+{/* SCROLLABLE CONTAINER */}
+<div 
+  ref={containerRef} 
+  class="flex-grow w-full bg-slate-600 overflow-auto relative touch-none" // touch-none zoom control ke liye better hai
+>
+  {/* Canvas wrapper - Removed justify-center/items-center classes */}
+  <div class="min-h-full min-w-full flex p-2">
+       <canvas 
+         ref={canvasRef} 
+         style={{ margin: 'auto' }} // Yeh magic property hai: Center bhi rakhega aur scroll bhi block nahi karega
+         class="shadow-2xl bg-white block" 
+       />
+  </div>
+</div>
+ 
     </div>
   );
 });
