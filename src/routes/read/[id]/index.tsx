@@ -53,6 +53,8 @@ export const useReaderData = routeLoader$(async ({ params, status, cookie }) => 
     if (Array.isArray(data)) data = data[0];
     bookData = data;
   } catch (err) {
+    // 👇 FIX: Error variable 'err' ko use kar liya
+    console.error('Book fetch error:', err); 
     status(500);
     return null;
   }
