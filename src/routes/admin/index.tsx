@@ -186,7 +186,13 @@ export default component$(() => {
                 </div>
                 <div>
                   <label class="text-xs font-bold text-slate-500 uppercase">Category</label>
-                  <input name="category" list="opts" value={formValues?.category} required class="w-full p-2 border rounded text-sm" />
+<input 
+  name="category" 
+  {...{ list: 'opts' } as any}  // 👈 Fix: Attribute ko spread operator se inject kiya
+  value={formValues?.category} 
+  required 
+  class="w-full p-2 border rounded text-sm" 
+/>
                   <datalist id="opts"><option value="engineering"/><option value="philosophy"/></datalist>
                 </div>
               </div>

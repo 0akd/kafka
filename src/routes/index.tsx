@@ -185,7 +185,7 @@ export default component$(() => {
             </div>
 
             <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {groupedBooks[category].map((book) => (
+           {groupedBooks[category].map((book: any) => ( // 👈 Fix: 'any' type add kar diya
                 <Link
                   key={book.id}
                   href={`/product/${book.id}`}
