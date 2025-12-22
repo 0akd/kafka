@@ -1,7 +1,7 @@
-import { component$, useSignal, useVisibleTask$, noSerialize, useStore, $ } from '@builder.io/qwik';
+import { component$, useSignal, useVisibleTask$, noSerialize, useStore } from '@builder.io/qwik';
 import { routeLoader$, routeAction$, Link, Form } from '@builder.io/qwik-city';
 
-// --- BACKEND LOGIC (Same as before) ---
+// --- BACKEND LOGIC (No Changes) ---
 export const useSavePage = routeAction$(async (data, { cookie, fail }) => {
   const backendUrl = import.meta.env.PUBLIC_BACKEND_URL;
   const userCookie = cookie.get('user_session');
@@ -38,7 +38,6 @@ export const useReaderData = routeLoader$(async ({ params, status, cookie }) => 
   const originalPdfUrl = bookData?.pdfUrl || bookData?.pdf_url;
   if (!originalPdfUrl) return { error: 'No PDF available' };
 
-  // Proxy URL
   const proxyUrl = `/api/proxy-pdf?url=${encodeURIComponent(originalPdfUrl)}`;
 
   let savedPage = 1;
@@ -67,47 +66,11 @@ export default component$(() => {
   const canvasRef = useSignal<HTMLCanvasElement>();
   const containerRef = useSignal<HTMLDivElement>();
   
-  const pdfState = useStore<{ doc: any }>({ doc: noSerialize(null) });
+  // ✅ FIX 1: null ki jagah undefined use karein
+  const pdfState = useStore<{ doc: any }>({ doc: noSerialize(undefined) });
 
-  // 🔥 FIX 1: renderPage ko QRL banaya ($ wrapper)
-  const renderPage = $(async (num: number) => {
-    if (!pdfState.doc || !canvasRef.value || !containerRef.value) return;
-
-    try {
-        const page = await pdfState.doc.getPage(num);
-        
-        const containerWidth = containerRef.value.clientWidth;
-        const unscaledViewport = page.getViewport({ scale: 1 });
-        const scale = (containerWidth - 40) / unscaledViewport.width; 
-        
-        const viewport = page.getViewport({ scale: scale < 0.5 ? 0.5 : scale });
-
-        const canvas = canvasRef.value;
-        const context = canvas.getContext('2d');
-
-        if (context) {
-            canvas.height = viewport.height;
-            canvas.width = viewport.width;
-
-            await page.render({
-                canvasContext: context,
-                viewport: viewport,
-            }).promise;
-        }
-    } catch (e) {
-        console.error("Render Error:", e);
-    }
-  });
-
-  // 🔥 FIX 2: changePage ko bhi QRL banaya ($ wrapper)
-  const changePage = $((newPage: number) => {
-    if (newPage >= 1 && newPage <= totalPages.value) {
-        currentPage.value = newPage;
-        // renderPage ab ek QRL hai, isliye isse call kar sakte hain
-        renderPage(newPage);
-    }
-  });
-
+  // ✅ FIX 2: PDF Logic ko Reactive banaya
+  // Pehle ye task PDF load karega
   useVisibleTask$(async () => {
     if (!bookSignal.value?.pdfUrl) {
         loadError.value = "No PDF URL found";
@@ -124,14 +87,47 @@ export default component$(() => {
       
       pdfState.doc = noSerialize(pdf);
       totalPages.value = pdf.numPages;
-      
-      await renderPage(currentPage.value);
-      isLoading.value = false;
-
+      // Note: Loading false yahan nahi karenge, render hone ke baad karenge
     } catch (error: any) {
       console.error("PDF Init Error:", error);
       loadError.value = error.message;
       isLoading.value = false;
+    }
+  });
+
+  // ✅ FIX 3: Rendering Logic ko alag task mein daala jo track() use karta hai
+  // Jab bhi 'currentPage' ya 'pdfState.doc' change hoga, ye chalega
+  useVisibleTask$(async ({ track }) => {
+    const pageNum = track(() => currentPage.value);
+    const doc = track(() => pdfState.doc);
+    const canvas = track(() => canvasRef.value);
+    const container = track(() => containerRef.value);
+
+    if (!doc || !canvas || !container) return;
+
+    try {
+        const page = await doc.getPage(pageNum);
+        
+        const containerWidth = container.clientWidth;
+        const unscaledViewport = page.getViewport({ scale: 1 });
+        // Responsive scale calculation
+        const scale = (containerWidth - 40) / unscaledViewport.width; 
+        const viewport = page.getViewport({ scale: scale < 0.5 ? 0.5 : scale });
+
+        const context = canvas.getContext('2d');
+        if (context) {
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            await page.render({
+                canvasContext: context,
+                viewport: viewport,
+            }).promise;
+            
+            isLoading.value = false; // Render complete hone par loading hatao
+        }
+    } catch (e) {
+        console.error("Render Error:", e);
     }
   });
 
@@ -158,8 +154,14 @@ export default component$(() => {
         </div>
 
         <div class="flex items-center gap-2">
-            {/* Ab ye changePage QRL hai, isliye onClick$ mein chalega */}
-            <button onClick$={() => changePage(currentPage.value - 1)} disabled={currentPage.value <= 1} class="p-2 bg-slate-700 rounded text-white disabled:opacity-50">⬅</button>
+            {/* Buttons ab seedha signal update karte hain */}
+            <button 
+                onClick$={() => {
+                    if (currentPage.value > 1) currentPage.value--;
+                }} 
+                disabled={currentPage.value <= 1} 
+                class="p-2 bg-slate-700 rounded text-white disabled:opacity-50"
+            >⬅</button>
             
             <Form action={saveAction}>
                 <input type="hidden" name="bookId" value={bookSignal.value?.id} />
@@ -167,7 +169,13 @@ export default component$(() => {
                 <button type="submit" class="bg-blue-600 px-3 py-1.5 rounded text-white text-xs font-bold">Save</button>
             </Form>
             
-            <button onClick$={() => changePage(currentPage.value + 1)} disabled={currentPage.value >= totalPages.value} class="p-2 bg-slate-700 rounded text-white disabled:opacity-50">➡</button>
+            <button 
+                onClick$={() => {
+                    if (currentPage.value < totalPages.value) currentPage.value++;
+                }}
+                disabled={currentPage.value >= totalPages.value} 
+                class="p-2 bg-slate-700 rounded text-white disabled:opacity-50"
+            >➡</button>
         </div>
       </div>
 
