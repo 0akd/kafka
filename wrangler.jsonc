@@ -1,0 +1,15 @@
+{
+  "name": "kafka",
+  "compatibility_date": "2025-12-22",
+  "pages_build_output_dir": "dist",
+  
+  "[site]": {
+    "bucket": "./dist"
+  },
+  
+  "node_compat": true,
+  
+  "build": {
+    "command": "npm run build"
+  }
+}
