@@ -1,11 +1,17 @@
+// src/routes/reader/[id]/index.tsx
+
 import { component$, useSignal, useVisibleTask$, noSerialize, useStore, $ } from '@builder.io/qwik';
 import { routeLoader$, routeAction$, Link, Form } from '@builder.io/qwik-city';
+// Note: Agar aapne pdfjs-dist install nahi kiya hai toh: npm install pdfjs-dist
+// import type { PDFDocumentProxy } from 'pdfjs-dist'; // Optional for types
 
-// --- BACKEND LOGIC (Same as before) ---
+// --- BACKEND LOGIC (Loaders/Actions) ---
+
 export const useSavePage = routeAction$(async (data, { cookie, fail }) => {
   const backendUrl = import.meta.env.PUBLIC_BACKEND_URL;
   const userCookie = cookie.get('user_session');
   if (!userCookie?.value) return fail(401, { message: 'Login required' });
+  
   const user = JSON.parse(userCookie.value);
 
   const payload = { userId: user.id, bookId: Number(data.bookId), page: Number(data.page) };
@@ -27,6 +33,7 @@ export const useReaderData = routeLoader$(async ({ params, status, cookie }) => 
 
   let bookData = null;
   try {
+    // Apne external backend se book info la rahe hain
     const res = await fetch(`${backendUrl}/api/books/${bookId}`);
     if (!res.ok) throw new Error();
     const json = await res.json();
@@ -38,7 +45,7 @@ export const useReaderData = routeLoader$(async ({ params, status, cookie }) => 
   const originalPdfUrl = bookData?.pdfUrl || bookData?.pdf_url;
   if (!originalPdfUrl) return { error: 'No PDF available' };
 
-  // Proxy URL
+  // IMPORTANT: Yeh URL ab Step 1 wali file ko hit karega
   const proxyUrl = `/api/proxy-pdf?url=${encodeURIComponent(originalPdfUrl)}`;
 
   let savedPage = 1;
@@ -67,15 +74,17 @@ export default component$(() => {
   const canvasRef = useSignal<HTMLCanvasElement>();
   const containerRef = useSignal<HTMLDivElement>();
   
- const pdfState = useStore<{ doc: any }>({ doc: undefined });
+  // PDF State store
+  const pdfState = useStore<{ doc: any }>({ doc: undefined });
 
-  // 🔥 FIX 1: renderPage ko QRL banaya ($ wrapper)
+  // Render Logic
   const renderPage = $(async (num: number) => {
     if (!pdfState.doc || !canvasRef.value || !containerRef.value) return;
 
     try {
         const page = await pdfState.doc.getPage(num);
         
+        // Responsive scaling logic
         const containerWidth = containerRef.value.clientWidth;
         const unscaledViewport = page.getViewport({ scale: 1 });
         const scale = (containerWidth - 40) / unscaledViewport.width; 
@@ -99,24 +108,24 @@ export default component$(() => {
     }
   });
 
-  // 🔥 FIX 2: changePage ko bhi QRL banaya ($ wrapper)
+  // Page Change Logic
   const changePage = $((newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages.value) {
         currentPage.value = newPage;
-        // renderPage ab ek QRL hai, isliye isse call kar sakte hain
         renderPage(newPage);
     }
   });
 
   useVisibleTask$(async () => {
-    if (!bookSignal.value?.pdfUrl) {
-        loadError.value = "No PDF URL found";
+    if (!bookSignal.value?.pdfUrl || bookSignal.value.error) {
+        loadError.value = bookSignal.value?.error || "No PDF URL found";
         isLoading.value = false;
         return;
     }
 
     try {
       const pdfjs = await import('pdfjs-dist');
+      // Make sure this file exists in your public folder!
       pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
       const loadingTask = pdfjs.getDocument(bookSignal.value.pdfUrl);
@@ -130,7 +139,7 @@ export default component$(() => {
 
     } catch (error: any) {
       console.error("PDF Init Error:", error);
-      loadError.value = error.message;
+      loadError.value = "Failed to load PDF. Check Proxy or URL.";
       isLoading.value = false;
     }
   });
@@ -138,8 +147,10 @@ export default component$(() => {
   if (loadError.value) {
       return (
           <div class="h-screen flex items-center justify-center bg-slate-900 text-red-400">
-             <p>Error: {loadError.value}</p>
-             <Link href="/" class="ml-4 underline">Back</Link>
+             <div class="text-center">
+                <p class="mb-4">Error: {loadError.value}</p>
+                <Link href="/" class="underline text-white">Back Home</Link>
+             </div>
           </div>
       );
   }
@@ -158,7 +169,6 @@ export default component$(() => {
         </div>
 
         <div class="flex items-center gap-2">
-            {/* Ab ye changePage QRL hai, isliye onClick$ mein chalega */}
             <button onClick$={() => changePage(currentPage.value - 1)} disabled={currentPage.value <= 1} class="p-2 bg-slate-700 rounded text-white disabled:opacity-50">⬅</button>
             
             <Form action={saveAction}>
