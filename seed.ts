@@ -5,8 +5,8 @@ import { books } from './src/db/schema';
 import 'dotenv/config'; 
 
 const client = createClient({
-  url: process.env.TURSO_CONNECTION_URL!,
-  authToken: process.env.TURSO_AUTH_TOKEN!,
+  url: "libsql://kafka-books-arjundubey.aws-eu-west-1.turso.io",
+  authToken:"eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NjYyNDIwOTIsImlkIjoiZmY3OWRhMGQtMzhkMi00ODhkLWFhNGUtNTk1YzUxOGU2YTBhIiwicmlkIjoiOTE5MTlmZTYtZjg0Ny00OTc3LWFhZjItY2NjOTA2MjMwNDEzIn0.IvUiSVTlyPTEvlAoTuKYjWvYCw44A8ssG0bqTqZiIBgEDRS4JTdq0--m9Op8OeIktvLjsM2X-G1YnZuY1QQGDA",
 });
 const db = drizzle(client);
 
