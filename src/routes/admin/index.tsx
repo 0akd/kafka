@@ -120,7 +120,7 @@ export const useSaveBook = routeAction$(async (data, { cookie, fail }) => {
     }
 
     return { success: true };
-  } catch (err) {
+  } catch  {
     return fail(500, { message: 'Network error' });
   }
 });
@@ -137,7 +137,7 @@ export const useDeleteBook = routeAction$(async (data, { cookie, fail }) => {
 
     if (!res.ok) return fail(res.status, { message: 'Delete failed' });
     return { success: true };
-  } catch (err) {
+  } catch  {
     return fail(500, { message: 'Network error' });
   }
 });
@@ -221,7 +221,12 @@ export default component$(() => {
                 {/* 👇 Type inference ab automatically kaam karega kyunki loader typed hai */}
                 {loader.value.allBooks.map((book) => (
                     <div key={book.id} class="p-3 border-b flex gap-4 items-center hover:bg-slate-50">
-                        <img src={book.coverUrl} class="w-10 h-14 object-cover bg-slate-200" />
+                        <img 
+  src={book.coverUrl} 
+  class="w-10 h-14 object-cover bg-slate-200" 
+  width={40}   // 👈 Added
+  height={56}  // 👈 Added
+/>
                         <div class="flex-grow">
                             <div class="font-bold text-sm">{book.title}</div>
                             <div class="text-xs text-slate-500">${(book.price/100).toFixed(2)} • {book.category}</div>
