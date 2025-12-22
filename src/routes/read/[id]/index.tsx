@@ -67,7 +67,7 @@ export default component$(() => {
   const canvasRef = useSignal<HTMLCanvasElement>();
   const containerRef = useSignal<HTMLDivElement>();
   
-  const pdfState = useStore<{ doc: any }>({ doc: noSerialize(null) });
+ const pdfState = useStore<{ doc: any }>({ doc: undefined });
 
   // 🔥 FIX 1: renderPage ko QRL banaya ($ wrapper)
   const renderPage = $(async (num: number) => {
