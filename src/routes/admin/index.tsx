@@ -1,43 +1,84 @@
 import { component$, useSignal } from '@builder.io/qwik';
 import { routeAction$, routeLoader$, Form, Link } from '@builder.io/qwik-city';
-import { eq } from 'drizzle-orm';
-import { db } from '~/db';
-import { books } from '~/db/schema';
 
-// --- UPDATED LOADER: Check Authentication & Authorization ---
-export const useManagerLoader = routeLoader$(async ({ url, cookie, error, redirect }) => {
+const BACKEND_URL = import.meta.env.PUBLIC_BACKEND_URL || 'http://localhost:3001';
+
+// --- TYPE DEFINITION (Ye TypeScript error fix karega) ---
+interface Book {
+  id: number;
+  title: string;
+  subtitle?: string | null;
+  price: number;
+  currency?: string;
+  coverUrl: string;
+  category: string;
+  pdfUrl?: string | null;
+}
+
+// --- LOADER: Check Authentication & Fetch Books ---
+export const useManagerLoader = routeLoader$(async ({ cookie, error, redirect, url }) => {
   // 1. Get User Session
   const userCookie = cookie.get('user_session');
-  
-  // 2. Check if user is logged in
-  if (!userCookie?.value) {
-    throw redirect(302, '/'); // Redirect to home/login if not logged in
-  }
+  if (!userCookie?.value) throw redirect(302, '/');
 
   const user = JSON.parse(userCookie.value);
 
-  // 3. CHECK EMAIL AUTHORIZATION (The key change)
+  // 2. CHECK EMAIL AUTHORIZATION
   const allowedEmails = ['atrikumar31@gmail.com', 'reboostify@gmail.com'];
-  
   if (!allowedEmails.includes(user.email)) {
-    // If logged in but wrong email, show 403 Forbidden
     throw error(403, 'Access Denied: You are not an admin.');
   }
 
-  // --- If passed, continue loading data ---
-  const allBooks = await db.select().from(books).all();
+  // 3. Fetch all books
+  const booksRes = await fetch(`${BACKEND_URL}/api/books`);
+  if (!booksRes.ok) throw error(500, 'Failed to fetch books');
+
+  const jsonResponse = await booksRes.json();
+  const rawBooks = jsonResponse.data || [];
+
+  // Fix: Map snake_case (backend) to camelCase (frontend) with TYPE
+  const allBooks: Book[] = rawBooks.map((b: any) => ({
+    id: b.id,
+    title: b.title,
+    subtitle: b.subtitle,
+    price: b.price,
+    currency: b.currency,
+    // 👇 Dual check for safety (coverUrl from Drizzle, cover_url from raw SQL)
+    coverUrl: b.coverUrl || b.cover_url, 
+    category: b.category,
+    pdfUrl: b.pdfUrl || b.pdf_url      
+  }));
+
+  // 4. If editing, fetch specific book
   const editId = url.searchParams.get('edit');
-  let editingBook = null;
+  let editingBook: Book | null = null;
 
   if (editId) {
-    const result = await db.select().from(books).where(eq(books.id, Number(editId))).get();
-    editingBook = result || null;
+    const bookRes = await fetch(`${BACKEND_URL}/api/books/${editId}`);
+    if (bookRes.ok) {
+      const bookJson = await bookRes.json();
+      const rawBook = bookJson.data || (Array.isArray(bookJson) ? bookJson[0] : bookJson);
+      
+      if (rawBook) {
+        editingBook = {
+            id: rawBook.id,
+            title: rawBook.title,
+            subtitle: rawBook.subtitle,
+            price: rawBook.price,
+            currency: rawBook.currency,
+            category: rawBook.category,
+            // Mapping fix here too
+            coverUrl: rawBook.coverUrl || rawBook.cover_url, 
+            pdfUrl: rawBook.pdfUrl || rawBook.pdf_url
+        };
+      }
+    }
   }
-  return { allBooks, editingBook, user }; // Return user data too if needed
+
+  return { allBooks, editingBook, user };
 });
 
-// --- ACTIONS (Security Check Added) ---
-// It is good practice to add the check here too, in case someone sends a POST request directly
+// --- ACTION: Save Book (Create or Update) ---
 export const useSaveBook = routeAction$(async (data, { cookie, fail }) => {
   const userCookie = cookie.get('user_session');
   if (!userCookie?.value) return fail(401, { message: 'Unauthorized' });
@@ -45,47 +86,63 @@ export const useSaveBook = routeAction$(async (data, { cookie, fail }) => {
   const user = JSON.parse(userCookie.value);
   const allowedEmails = ['atrikumar31@gmail.com', 'reboostify@gmail.com'];
 
-  if (!allowedEmails.includes(user.email)) {
-    return fail(403, { message: 'Forbidden' });
-  }
+  if (!allowedEmails.includes(user.email)) return fail(403, { message: 'Forbidden' });
 
   const priceInCents = Math.round(Number(data.price) * 100);
-  const values = {
-    title: data.title as string,
-    subtitle: (data.subtitle as string) || null,
+  
+  // Prepare payload: Convert camelCase back to snake_case for backend
+  const payload = {
+    title: data.title,
+    subtitle: data.subtitle || null,
     price: priceInCents,
     currency: '$',
-    coverUrl: data.coverUrl as string,
-    category: data.category as string,
-    pdfUrl: (data.pdfUrl as string) || null, 
+    cover_url: data.coverUrl, // Backend expects cover_url
+    category: data.category,
+    pdf_url: data.pdfUrl || null // Backend expects pdf_url
   };
 
-  if (data.id) {
-    await db.update(books).set(values).where(eq(books.id, Number(data.id)));
-  } else {
-    await db.insert(books).values(values);
+  try {
+    const endpoint = data.id 
+      ? `${BACKEND_URL}/api/books/${data.id}` 
+      : `${BACKEND_URL}/api/books`;
+
+    const method = data.id ? 'PUT' : 'POST';
+
+    const res = await fetch(endpoint, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const error = await res.json();
+      return fail(res.status, { message: error.error || 'Operation failed' });
+    }
+
+    return { success: true };
+  } catch (err) {
+    return fail(500, { message: 'Network error' });
   }
-  return { success: true };
 });
 
+// --- ACTION: Delete Book ---
 export const useDeleteBook = routeAction$(async (data, { cookie, fail }) => {
   const userCookie = cookie.get('user_session');
   if (!userCookie?.value) return fail(401, { message: 'Unauthorized' });
+  
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/books/${data.id}`, {
+      method: 'DELETE',
+    });
 
-  const user = JSON.parse(userCookie.value);
-  const allowedEmails = ['atrikumar31@gmail.com', 'reboostify@gmail.com'];
-
-  if (!allowedEmails.includes(user.email)) {
-    return fail(403, { message: 'Forbidden' });
+    if (!res.ok) return fail(res.status, { message: 'Delete failed' });
+    return { success: true };
+  } catch (err) {
+    return fail(500, { message: 'Network error' });
   }
-
-  if (data.id) {
-    await db.delete(books).where(eq(books.id, Number(data.id)));
-  }
-  return { success: true };
 });
 
-// --- UI COMPONENT (No logical changes, just rendering) ---
+// --- UI COMPONENT ---
 export default component$(() => {
   const loader = useManagerLoader();
   const saveAction = useSaveBook();
@@ -102,146 +159,91 @@ export default component$(() => {
         {/* --- LEFT: FORM --- */}
         <div class="md:col-span-5">
           <div class="bg-white p-6 rounded-2xl shadow-lg sticky top-6">
-            <div class="flex justify-between items-center mb-4">
-              <h2 class="text-xl font-bold text-slate-900">
-                {isEditing ? 'Edit Book' : 'Add New Book'}
-              </h2>
-              {isEditing && (
-                <Link href="/admin" class="text-xs text-slate-500 hover:text-red-500 font-bold underline">
-                  Cancel Edit
-                </Link>
-              )}
-            </div>
+            <h2 class="text-xl font-bold text-slate-900 mb-4 flex justify-between">
+              {isEditing ? 'Edit Book' : 'Add New Book'}
+              {isEditing && <Link href="/admin" class="text-xs text-red-500 underline">Cancel</Link>}
+            </h2>
 
-            {saveAction.value?.success && (
-              <div class="bg-green-100 text-green-800 p-3 rounded-lg mb-4 text-xs font-bold">
-                {isEditing ? '✅ Changes saved!' : '✅ Book created!'}
-              </div>
-            )}
-
+            {saveAction.value?.success && <div class="bg-green-100 text-green-800 p-2 rounded mb-4 text-xs">✅ Saved successfully!</div>}
+            
             <Form action={saveAction} class="space-y-3">
               {isEditing && <input type="hidden" name="id" value={formValues?.id} />}
               
               <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Title</label>
-                <input name="title" value={formValues?.title} required class="w-full p-2 border border-slate-200 rounded text-sm" />
+                <label class="text-xs font-bold text-slate-500 uppercase">Title</label>
+                <input name="title" value={formValues?.title} required class="w-full p-2 border rounded text-sm" />
               </div>
 
               <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Subtitle</label>
-                <input name="subtitle" value={formValues?.subtitle} class="w-full p-2 border border-slate-200 rounded text-sm" />
+                <label class="text-xs font-bold text-slate-500 uppercase">Subtitle</label>
+                <input name="subtitle" value={formValues?.subtitle || ''} class="w-full p-2 border rounded text-sm" />
               </div>
 
               <div class="grid grid-cols-2 gap-3">
                 <div>
-                  <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Price ($)</label>
-                  <input name="price" type="number" step="0.01" value={formValues ? (formValues.price / 100).toFixed(2) : ''} required class="w-full p-2 border border-slate-200 rounded text-sm" />
+                  <label class="text-xs font-bold text-slate-500 uppercase">Price ($)</label>
+                  <input name="price" type="number" step="0.01" value={formValues ? (formValues.price / 100).toFixed(2) : ''} required class="w-full p-2 border rounded text-sm" />
                 </div>
-                
                 <div>
-                  <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Category</label>
-                  <input 
-                    name="category"
-                    // @ts-expect-error: list is a valid html attribute but missing in types
-                    list="categoryOptions"
-                    value={formValues?.category} 
-                    required
-                    placeholder="Type or select..."
-                    class="w-full p-2 border border-slate-200 rounded text-sm bg-white"
-                  />
-                  <datalist id="categoryOptions">
-                    <option value="engineering" />
-                    <option value="advanced" />
-                    <option value="devops" />
-                    <option value="microservices" />
-                    <option value="architecture" />
-                  </datalist>
+                  <label class="text-xs font-bold text-slate-500 uppercase">Category</label>
+                  <input name="category" list="opts" value={formValues?.category} required class="w-full p-2 border rounded text-sm" />
+                  <datalist id="opts"><option value="engineering"/><option value="philosophy"/></datalist>
                 </div>
               </div>
 
               <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Cover URL</label>
-                <input name="coverUrl" value={formValues?.coverUrl} required class="w-full p-2 border border-slate-200 rounded text-sm font-mono text-xs" />
-              </div>
-              
-              <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">
-                  PDF URL (Optional)
-                </label>
-                <input 
-                  name="pdfUrl" 
-                  value={formValues?.pdfUrl || ''} 
-                  placeholder="https://cdn.example.com/book.pdf"
-                  class="w-full p-2 border border-slate-200 rounded text-sm font-mono text-xs" 
-                />
+                <label class="text-xs font-bold text-slate-500 uppercase">Cover URL</label>
+                <input name="coverUrl" value={formValues?.coverUrl} required class="w-full p-2 border rounded text-sm font-mono text-xs" />
               </div>
 
-              <button type="submit" class={`w-full text-white font-bold py-3 rounded-lg transition-all mt-2 ${isEditing ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                {saveAction.isRunning ? 'Saving...' : (isEditing ? 'Update Book' : 'Add Book')}
+              <div>
+                <label class="text-xs font-bold text-slate-500 uppercase">PDF URL</label>
+                <input name="pdfUrl" value={formValues?.pdfUrl || ''} class="w-full p-2 border rounded text-sm font-mono text-xs" />
+              </div>
+
+              <button type="submit" class="w-full bg-blue-600 text-white font-bold py-3 rounded hover:bg-blue-700 mt-2">
+                {saveAction.isRunning ? 'Saving...' : (isEditing ? 'Update' : 'Add Book')}
               </button>
             </Form>
           </div>
         </div>
 
         {/* --- RIGHT: LIST --- */}
-        <div class="md:col-span-7 space-y-4">
-          <h2 class="text-xl font-bold text-slate-900 flex items-center justify-between">
-            <span>Inventory</span>
-            <span class="text-sm font-normal text-slate-500">{loader.value.allBooks.length} items</span>
-          </h2>
-
-          <div class="bg-white rounded-2xl shadow-sm overflow-hidden border border-slate-100">
-            {loader.value.allBooks.map((book) => (
-              <div key={book.id} class="p-4 border-b border-slate-100 last:border-0 flex gap-4 items-center hover:bg-slate-50 transition-colors group">
-                <div class="w-12 h-16 shrink-0 bg-slate-200 rounded overflow-hidden">
-                  <img 
-                    src={book.coverUrl} 
-                    class="w-full h-full object-cover" 
-                    width={48} 
-                    height={64} 
-                  />
-                </div>
-
-                <div class="flex-grow">
-                  <h3 class="font-bold text-slate-800 text-sm">{book.title}</h3>
-                  <div class="text-xs text-slate-500 flex gap-2 mt-1">
-                    <span class="bg-slate-100 px-2 py-0.5 rounded text-slate-600 uppercase tracking-wider text-[10px]">{book.category}</span>
-                    <span>${(book.price / 100).toFixed(2)}</span>
-                  </div>
-                </div>
-
-                <div class="flex gap-2">
-                  <Link href={`/admin?edit=${book.id}`} class="px-3 py-1.5 text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-md transition-colors">
-                    Edit
-                  </Link>
-                  <button onClick$={() => pendingDeleteId.value = book.id} class="px-3 py-1.5 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors opacity-60 group-hover:opacity-100">
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))}
-            
-            {loader.value.allBooks.length === 0 && (
-              <div class="p-8 text-center text-slate-400 text-sm">No books found.</div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* --- CONFIRMATION POPUP --- */}
-      {pendingDeleteId.value && (
-        <div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div class="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full animate-in fade-in zoom-in duration-200">
-            <h3 class="text-lg font-bold text-slate-900 mb-2">Delete this book?</h3>
-            <p class="text-slate-500 text-sm mb-6">Are you sure?</p>
-            <div class="flex gap-3">
-              <button onClick$={() => pendingDeleteId.value = null} class="flex-1 py-2.5 px-4 bg-slate-100 text-slate-700 font-bold rounded-lg hover:bg-slate-200 text-sm">Cancel</button>
-              <Form action={deleteAction} onSubmitCompleted$={() => pendingDeleteId.value = null} class="flex-1">
-                <input type="hidden" name="id" value={pendingDeleteId.value} />
-                <button type="submit" class="w-full py-2.5 px-4 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 text-sm">Yes, Delete</button>
-              </Form>
+        <div class="md:col-span-7">
+            <h2 class="text-xl font-bold mb-4">Inventory ({loader.value.allBooks.length})</h2>
+            <div class="bg-white rounded-xl shadow-sm overflow-hidden border">
+                {/* 👇 Type inference ab automatically kaam karega kyunki loader typed hai */}
+                {loader.value.allBooks.map((book) => (
+                    <div key={book.id} class="p-3 border-b flex gap-4 items-center hover:bg-slate-50">
+                        <img src={book.coverUrl} class="w-10 h-14 object-cover bg-slate-200" />
+                        <div class="flex-grow">
+                            <div class="font-bold text-sm">{book.title}</div>
+                            <div class="text-xs text-slate-500">${(book.price/100).toFixed(2)} • {book.category}</div>
+                        </div>
+                        <div class="flex gap-2">
+                            <Link href={`/admin?edit=${book.id}`} class="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded">Edit</Link>
+                            <button onClick$={() => pendingDeleteId.value = book.id} class="text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded">Delete</button>
+                        </div>
+                    </div>
+                ))}
             </div>
-          </div>
+        </div>
+
+      </div>
+      
+      {/* DELETE MODAL */}
+      {pendingDeleteId.value && (
+        <div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+            <div class="bg-white p-6 rounded-lg shadow-xl">
+                <h3 class="font-bold text-lg mb-4">Delete Book?</h3>
+                <div class="flex gap-4">
+                    <button onClick$={() => pendingDeleteId.value = null} class="px-4 py-2 bg-slate-200 rounded font-bold">Cancel</button>
+                    <Form action={deleteAction} onSubmitCompleted$={() => pendingDeleteId.value = null}>
+                        <input type="hidden" name="id" value={pendingDeleteId.value} />
+                        <button class="px-4 py-2 bg-red-600 text-white rounded font-bold">Yes, Delete</button>
+                    </Form>
+                </div>
+            </div>
         </div>
       )}
     </div>

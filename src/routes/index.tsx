@@ -4,23 +4,52 @@ import { useLoginAction, useLogoutAction, useUserLoader } from './layout';
 
 /* -------------------------------------------------
    SERVER LOADER — FETCH BOOKS FROM BACKEND API
+   (WITH DELAY FOR SERVERLESS COLD START)
+   ------------------------------------------------- */
+/* -------------------------------------------------
+   SERVER LOADER — FETCH BOOKS FROM BACKEND API
    ------------------------------------------------- */
 export const useBooksLoader = routeLoader$(async () => {
-  const res = await fetch(
-    `${import.meta.env.PUBLIC_BACKEND_URL}/api/books`
-  );
+  const backendUrl = import.meta.env.PUBLIC_BACKEND_URL;
+
+  // Artificial delay
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+
+  const url = `${backendUrl}/api/books`;
+  console.log('Fetching books from:', url);
+
+  const res = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+  });
 
   if (!res.ok) {
-    throw new Error('Failed to fetch books');
+    throw new Error(`Failed to fetch books (${res.status})`);
   }
 
-  return res.json() as Promise<Array<{
-    id: number;
-    title: string;
-    price: number;
-    coverUrl: string;
-    category: string;
-  }>>;
+  const jsonResponse = await res.json();
+  const rawData = jsonResponse.data || [];
+  
+  // Debugging: Terminal mein check karein ki data kaisa dikh raha hai
+  if (rawData.length > 0) {
+    console.log('Sample Book Data:', rawData[0]);
+  }
+
+  // 👇 FIX: Backend agar 'coverUrl' bhej raha hai toh usse use karein
+  return rawData.map((book: any) => ({
+    id: book.id,
+    title: book.title,
+    subtitle: book.subtitle,
+    price: book.price,
+    currency: book.currency,
+    
+    // ✅ YAHAN CHANGE HAI: Dono keys check karein
+    coverUrl: book.coverUrl || book.cover_url, 
+    
+    category: book.category,
+    
+    // ✅ PDF ke liye bhi same fix
+    pdfUrl: book.pdfUrl || book.pdf_url      
+  }));
 });
 
 /* -------------------------------------------------
@@ -83,7 +112,10 @@ export default component$(() => {
   /* -------------------------------------------------
      GROUP BOOKS BY CATEGORY
      ------------------------------------------------- */
-  const groupedBooks = booksSignal.value.reduce((acc, book) => {
+  // Fix: Ensure karein ki ye hamesha ek array ho, warna empty array use karein
+  const books = Array.isArray(booksSignal.value) ? booksSignal.value : [];
+
+  const groupedBooks = books.reduce((acc, book) => {
     const cat = book.category || 'Uncategorized';
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(book);
@@ -187,7 +219,7 @@ export default component$(() => {
           </div>
         ))}
 
-        {booksSignal.value.length === 0 && (
+        {books.length === 0 && (
           <div class="text-center py-20 text-slate-400 bg-white rounded-xl border border-dashed">
             No books available.
           </div>

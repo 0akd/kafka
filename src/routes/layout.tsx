@@ -20,6 +20,7 @@ export const useUserLoader = routeLoader$(async ({ cookie }) => {
    ------------------------------------------------- */
 export const useLoginAction = routeAction$(async (data, { cookie }) => {
   try {
+    // Backend API Call
     const res = await fetch(
       `${import.meta.env.PUBLIC_BACKEND_URL}/api/auth/google`,
       {
@@ -35,12 +36,21 @@ export const useLoginAction = routeAction$(async (data, { cookie }) => {
       return { success: false, error: 'Login failed' };
     }
 
-    const user = await res.json();
+    const responseData = await res.json();
 
-    // Store session in cookie (Edge-safe)
-    cookie.set('user_session', JSON.stringify(user), {
-      httpOnly: true,
-      secure: true,
+    // 👇 FIX 1: Backend wrapper check karein
+    // Backend bhej raha hai: { success: true, user: {...} }
+    // Humein sirf 'user' object chahiye.
+    const userToSave = responseData.user || responseData;
+
+    // Store session in cookie
+    cookie.set('user_session', JSON.stringify(userToSave), {
+      httpOnly: false, // Development me false rakhein (Production me true)
+      
+      // 👇 FIX 2: Localhost pe 'secure: true' cookie set hone nahi deta
+      // Jab production me HTTPS pe dalein tab ise true karein
+      secure: false, 
+      
       path: '/',
       maxAge: 60 * 60 * 24 * 7, // 1 week
       sameSite: 'lax',
@@ -48,7 +58,7 @@ export const useLoginAction = routeAction$(async (data, { cookie }) => {
 
     return { success: true };
   } catch (err) {
-    console.error(err);
+    console.error('Login Action Error:', err);
     return { success: false, error: 'Login failed' };
   }
 });
@@ -62,7 +72,7 @@ export const useLogoutAction = routeAction$(async (_, { cookie }) => {
 });
 
 /* -------------------------------------------------
-   4. LAYOUT COMPONENT (UNCHANGED UI)
+   4. LAYOUT COMPONENT
    ------------------------------------------------- */
 export default component$(() => {
   const loc = useLocation();
