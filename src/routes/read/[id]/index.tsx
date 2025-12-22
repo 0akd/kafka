@@ -1,4 +1,4 @@
-import { component$, useSignal } from '@builder.io/qwik';
+import { component$, useSignal, useVisibleTask$ } from '@builder.io/qwik';
 import { routeLoader$, routeAction$, Link, Form } from '@builder.io/qwik-city';
 
 // --- ACTION: SAVE PAGE (Call Backend API) ---
@@ -53,7 +53,6 @@ export const useReaderData = routeLoader$(async ({ params, status, cookie }) => 
     if (Array.isArray(data)) data = data[0];
     bookData = data;
   } catch (err) {
-    // 👇 FIX: Error variable 'err' ko use kar liya
     console.error('Book fetch error:', err); 
     status(500);
     return null;
@@ -95,6 +94,27 @@ export default component$(() => {
 
   // Initialize page number from Loader data
   const currentPage = useSignal(bookSignal.value?.initialPage || 1);
+  
+  // 🔥 NEW: Store the local Blob URL here
+  const pdfBlobUrl = useSignal<string | null>(null);
+
+  // 🔥 NEW: Fetch PDF on client side to avoid Chrome blocking issues
+  useVisibleTask$(async () => {
+    const url = bookSignal.value?.pdfUrl;
+    if (url && !pdfBlobUrl.value) {
+        try {
+            console.log("Fetching PDF for Blob...");
+            const res = await fetch(url);
+            const blob = await res.blob();
+            // Create a local URL (e.g., blob:http://localhost:5173/...)
+            pdfBlobUrl.value = URL.createObjectURL(blob);
+        } catch (err) {
+            console.error("Blob generation failed, falling back to original URL", err);
+            // Agar fetch fail ho jaye, toh original URL hi use karein
+            pdfBlobUrl.value = url;
+        }
+    }
+  });
 
   if (!bookSignal.value || bookSignal.value.error) {
     return (
@@ -105,8 +125,9 @@ export default component$(() => {
     );
   }
 
-  // URL Append Logic: adds #page=X
-  const pdfSrcWithPage = `${bookSignal.value.pdfUrl}#page=${currentPage.value}`;
+  // URL Logic: Use Blob URL if available, otherwise original. Append page #.
+  const activePdfUrl = pdfBlobUrl.value || ''; 
+  const pdfSrcWithPage = activePdfUrl ? `${activePdfUrl}#page=${currentPage.value}` : '';
 
   return (
     <div class="h-screen flex flex-col bg-slate-900 overflow-hidden">
@@ -152,26 +173,26 @@ export default component$(() => {
         </Link>
       </div>
 
-{/* PDF Viewer */}
-<div class="flex-grow w-full h-full relative bg-slate-200">
-  {/* Chrome fix: Use object tag instead of iframe */}
-  <object
-    key={currentPage.value} // Re-mounts component to force page jump
-    data={pdfSrcWithPage}
-    type="application/pdf"
-    class="w-full h-full border-0"
-  >
-    {/* Fallback if PDF fails to load */}
-    <div class="flex items-center justify-center h-full">
-        <p class="text-slate-500">
-            PDF load nahi ho raha? 
-            <a href={bookSignal.value.pdfUrl} target="_blank" class="text-blue-600 underline ml-1">
-                Download karein
-            </a>
-        </p>
-    </div>
-  </object>
-</div>
+      {/* PDF Viewer */}
+      <div class="flex-grow w-full h-full relative bg-slate-200">
+        
+        {/* Conditional Rendering: Show Loader until Blob is ready */}
+        {pdfBlobUrl.value ? (
+             <iframe
+                key={currentPage.value} // Key forces reload on page change
+                src={pdfSrcWithPage}
+                class="w-full h-full border-0"
+                referrerPolicy="no-referrer"
+                title="PDF Viewer"
+             />
+        ) : (
+            <div class="flex flex-col items-center justify-center h-full gap-3">
+                <div class="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                <p class="text-slate-500 font-medium">Loading PDF...</p>
+            </div>
+        )}
+
+      </div>
       
     </div>
   );
