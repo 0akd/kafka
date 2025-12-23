@@ -1,107 +1,184 @@
 import { component$, useSignal } from '@builder.io/qwik';
 import { routeAction$, routeLoader$, Form } from '@builder.io/qwik-city';
+import { useUserLoader } from '../layout';
 
-const BACKEND_URL = import.meta.env.PUBLIC_BACKEND_URL || 'http://localhost:3000';
+const BACKEND_URL =
+  import.meta.env.PUBLIC_BACKEND_URL || 'http://localhost:3000';
 
-export const useCardsLoader = routeLoader$(async () => {
-  const res = await fetch(`${BACKEND_URL}/api/cards`, { cache: 'no-store' });
+/* ---------------------------------
+   LOAD CARDS (user-scoped)
+--------------------------------- */
+export const useCardsLoader = routeLoader$(async ({ resolveValue }) => {
+  const user = await resolveValue(useUserLoader);
+  if (!user) return [];
+
+  const res = await fetch(
+    `${BACKEND_URL}/api/cards?userId=${user.id}`,
+    { cache: 'no-store' }
+  );
+
   if (!res.ok) return [];
+
   const json = await res.json();
   return json.data || [];
 });
 
+/* ---------------------------------
+   ACTION (NO resolveValue here)
+--------------------------------- */
 export const useManageCard = routeAction$(async (data) => {
-  const url = `${BACKEND_URL}/api/cards${data.intent === 'delete' ? `?id=${data.id}` : ''}`;
-  
   const methodMap: Record<string, string> = {
     add: 'POST',
     edit: 'PATCH',
     increment: 'PATCH',
     decrement: 'PATCH',
-    delete: 'DELETE'
+    delete: 'DELETE',
   };
 
+  const url =
+    `${BACKEND_URL}/api/cards` +
+    (data.intent === 'delete'
+      ? `?id=${data.id}&userId=${data.userId}`
+      : '');
+
   const res = await fetch(url, {
-    method: methodMap[data.intent as string],
+    method: methodMap[data.intent],
     headers: { 'Content-Type': 'application/json' },
-    body: data.intent !== 'delete' ? JSON.stringify(data) : undefined,
+    body:
+      data.intent !== 'delete'
+        ? JSON.stringify(data)
+        : undefined,
   });
 
-  if (!res.ok) throw new Error('Action failed');
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('Cards API failed:', text);
+    throw new Error('Action failed');
+  }
+
   return { success: true };
 });
 
+/* ---------------------------------
+   COMPONENT
+--------------------------------- */
 export default component$(() => {
   const cards = useCardsLoader();
   const manageAction = useManageCard();
   const editingId = useSignal<number | null>(null);
+  const user = useUserLoader(); // ✅ SAFE HERE
+const showDecrementFor = useSignal<number | null>(null);
+
+  if (!user.value) {
+    return <p class="p-6">Please log in</p>;
+  }
 
   return (
-    <div class="min-h-screen bg-slate-50 p-6 font-sans text-slate-900">
+    <div class="min-h-screen bg-slate-50 p-6">
       <div class="max-w-3xl mx-auto">
-        <h1 class="text-2xl font-black mb-8 text-blue-600 tracking-tight">CARD MANAGER ({cards.value.length})</h1>
+        <h1 class="text-2xl font-black mb-8 text-blue-600">
+          CARD MANAGER ({cards.value.length})
+        </h1>
 
-        {/* CREATE CARD FORM */}
-        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 mb-8">
-          <Form action={manageAction} class="flex flex-col md:flex-row gap-2">
+        {/* CREATE */}
+        <div class="bg-white p-5 rounded-xl mb-8">
+          <Form action={manageAction} class="flex gap-2">
             <input type="hidden" name="intent" value="add" />
-            <input name="title" placeholder="Title" class="flex-1 border p-2 rounded-xl" required />
-            <input name="description" placeholder="Desc" class="flex-1 border p-2 rounded-xl" />
-            <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold">Add</button>
+            <input type="hidden" name="userId" value={user.value.id} />
+            <input name="title" required class="border p-2 flex-1" />
+            <input name="description" class="border p-2 flex-1" />
+            <button class="bg-blue-600 text-white px-4">Add</button>
           </Form>
         </div>
 
-        {/* CARDS LIST */}
-        <div class="space-y-4">
-          {cards.value.map((card: any) => (
-            <div key={card.id} class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col md:flex-row justify-between items-center group">
-              <div class="flex-1 w-full">
-                {editingId.value === card.id ? (
-                  <Form action={manageAction} onSubmitCompleted$={() => (editingId.value = null)} class="space-y-2">
-                    <input type="hidden" name="intent" value="edit" /><input type="hidden" name="id" value={card.id} />
-                    <input name="title" defaultValue={card.title} class="w-full border p-2 rounded-lg" />
-                    <input name="description" defaultValue={card.description} class="w-full border p-2 rounded-lg" />
-                    <div class="flex gap-2">
-                        <button type="submit" class="bg-green-600 text-white px-3 py-1 rounded-lg text-xs font-bold">Save</button>
-                        <button type="button" onClick$={() => (editingId.value = null)} class="text-slate-400 text-xs font-bold">Cancel</button>
-                    </div>
-                  </Form>
-                ) : (
-                  <div>
-                    <h3 class="font-bold text-lg">{card.title}</h3>
-                    <p class="text-slate-500 text-sm">{card.description}</p>
-                    <div class="mt-3 flex items-center gap-3">
-                        {/* DECREMENT */}
-                        <Form action={manageAction}>
-                            <input type="hidden" name="intent" value="decrement" /><input type="hidden" name="id" value={card.id} />
-                            <button type="submit" class="bg-slate-100 h-8 w-8 rounded-full font-bold hover:bg-red-50 hover:text-red-600 transition">-</button>
-                        </Form>
+        {/* LIST */}
+        {cards.value.map((card: any) => (
+          <div key={card.id} class="bg-white p-4 mb-3 rounded-xl">
+            {editingId.value === card.id ? (
+              <Form action={manageAction}>
+                <input type="hidden" name="intent" value="edit" />
+                <input type="hidden" name="id" value={card.id} />
+                <input type="hidden" name="userId" value={user.value.id} />
+                <input name="title" defaultValue={card.title} />
+                <input name="description" defaultValue={card.description} />
+                <button>Save</button>
+              </Form>
+            ) : (
+              <>
+  {/* CARD TITLE */}
+  <h3 class="text-lg font-bold text-center mb-3">
+    {card.title}
+  </h3>
 
-                        <span class="font-black text-blue-600 bg-blue-50 px-4 py-1 rounded-full border border-blue-100">{card.counter}</span>
+  {/* COUNTER ROW */}
+  <div class="relative flex items-center justify-center gap-6 my-4">
 
-                        {/* INCREMENT */}
-                        <Form action={manageAction}>
-                            <input type="hidden" name="intent" value="increment" /><input type="hidden" name="id" value={card.id} />
-                            <button type="submit" class="bg-slate-100 h-8 w-8 rounded-full font-bold hover:bg-green-50 hover:text-green-600 transition">+</button>
-                        </Form>
-                    </div>
-                  </div>
-                )}
-              </div>
+    {/* LEFT AREA (tap to reveal decrement) */}
+    <div
+      class="w-12 h-12 flex items-center justify-center cursor-pointer"
+      onClick$={() =>
+        (showDecrementFor.value =
+          showDecrementFor.value === card.id ? null : card.id)
+      }
+    >
+      {showDecrementFor.value === card.id && (
+        <Form action={manageAction}>
+          <input type="hidden" name="intent" value="decrement" />
+          <input type="hidden" name="id" value={card.id} />
+          <input type="hidden" name="userId" value={user.value.id} />
+          <button class="text-3xl font-bold text-red-600">
+            −
+          </button>
+        </Form>
+      )}
+    </div>
 
-              {/* ACTIONS */}
-              {!editingId.value && (
-                <div class="flex gap-4 mt-4 md:mt-0 opacity-0 group-hover:opacity-100 transition">
-                  <button onClick$={() => (editingId.value = card.id)} class="text-xs font-bold text-slate-400 hover:text-blue-600">EDIT</button>
-                  <Form action={manageAction} onSubmit$={(e) => !confirm('Delete?') && e.preventDefault()}>
-                    <input type="hidden" name="intent" value="delete" /><input type="hidden" name="id" value={card.id} />
-                    <button type="submit" class="text-xs font-bold text-slate-400 hover:text-red-600">DELETE</button>
-                  </Form>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+    {/* COUNTER NUMBER */}
+    <span class="text-4xl font-black text-gray-800">
+      {card.counter}
+    </span>
+
+    {/* INCREMENT BUTTON (always visible) */}
+    <Form action={manageAction}>
+      <input type="hidden" name="intent" value="increment" />
+      <input type="hidden" name="id" value={card.id} />
+      <input type="hidden" name="userId" value={user.value.id} />
+      <button class="text-3xl font-bold text-green-600">
+        +
+      </button>
+    </Form>
+  </div>
+
+  {/* DESCRIPTION */}
+  {card.description && (
+    <p class="text-center text-sm text-gray-600 mt-2">
+      {card.description}
+    </p>
+  )}
+
+  {/* ACTIONS */}
+  <div class="flex justify-center gap-4 mt-4">
+    <button
+      class="text-blue-600 text-sm"
+      onClick$={() => (editingId.value = card.id)}
+    >
+      Edit
+    </button>
+
+    <Form action={manageAction}>
+      <input type="hidden" name="intent" value="delete" />
+      <input type="hidden" name="id" value={card.id} />
+      <input type="hidden" name="userId" value={user.value.id} />
+      <button class="text-red-600 text-sm">
+        Delete
+      </button>
+    </Form>
+  </div>
+</>
+
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
