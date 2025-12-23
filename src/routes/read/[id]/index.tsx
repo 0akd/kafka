@@ -126,6 +126,9 @@ export default component$(() => {
   const pdfDoc = useSignal<NoSerialize<any>>();
   const containerWidth = useSignal(0);
   const mainContainerRef = useSignal<HTMLDivElement>();
+  
+  // --- UI CONTROLS STATE ---
+  const showControls = useSignal(true);
 
   const zoomState = useStore({
     scale: 1.0,     
@@ -133,12 +136,8 @@ export default component$(() => {
     startDist: 0
   });
 
-  // --- CENTER-ANCHORED ZOOM LOGIC ---
   const updateZoom = $((newScale: number, centerX?: number, centerY?: number) => {
-     // 1. Clamp Scale (0.5x to 3.0x)
      const clampedScale = Math.min(Math.max(newScale, 0.5), 3.0);
-     
-     // Optimization: Don't do heavy math if scale hasn't effectively changed
      if (Math.abs(clampedScale - zoomState.scale) < 0.01) return;
 
      const el = mainContainerRef.value;
@@ -146,25 +145,15 @@ export default component$(() => {
 
      const oldScale = zoomState.scale;
      const ratio = clampedScale / oldScale;
-
-     // 2. Determine Anchor Point (Where are we zooming into?)
-     // If centerX/Y are provided (Pinch), use those.
-     // If not (Slider), use the exact center of the current viewport.
      const rect = el.getBoundingClientRect();
      const viewportCX = centerX !== undefined ? (centerX - rect.left) : (rect.width / 2);
      const viewportCY = centerY !== undefined ? (centerY - rect.top) : (rect.height / 2);
 
-     // 3. Calculate Point in Document Space
-     // "Where is this point in the scrollable document right now?"
      const docX = el.scrollLeft + viewportCX;
      const docY = el.scrollTop + viewportCY;
 
-     // 4. Update State (Trigger Reactivity)
      zoomState.scale = clampedScale;
 
-     // 5. Adjust Scroll Position
-     // The point (docX, docY) will move to (docX * ratio, docY * ratio) after the width change.
-     // We subtract viewportCX/Y to bring that point back to the same spot on the screen.
      requestAnimationFrame(() => {
         el.scrollLeft = (docX * ratio) - viewportCX;
         el.scrollTop = (docY * ratio) - viewportCY;
@@ -185,20 +174,14 @@ export default component$(() => {
   const handleTouchMove = $((e: TouchEvent) => {
     if (e.touches.length === 2) {
       e.preventDefault(); 
-      
       const t1 = e.touches[0];
       const t2 = e.touches[1];
-
-      // Calculate Distance
       const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-      
-      // Calculate Center Point of the Pinch (The "free will" point)
       const midX = (t1.clientX + t2.clientX) / 2;
       const midY = (t1.clientY + t2.clientY) / 2;
 
       if (zoomState.startDist > 0) {
         const newScale = zoomState.baseScale * (dist / zoomState.startDist);
-        // Pass the midpoint so we zoom into exactly where the fingers are
         updateZoom(newScale, midX, midY);
       }
     }
@@ -248,14 +231,19 @@ export default component$(() => {
     if (num >= 1) currentPage.value = num; 
   });
 
+  // Toggle controls on single tap
+  const handleContainerClick = $(() => {
+    showControls.value = !showControls.value;
+  });
+
   return (
     <div class="h-[100dvh] flex flex-col bg-slate-900 overflow-hidden relative">
       
-      {/* SCROLL CONTAINER */}
+      {/* SCROLL CONTAINER (Tapping here toggles UI) */}
       <div 
         ref={mainContainerRef}
-        // NOTE: removed 'scroll-smooth' to prevent fighting with the zoom math
-        class="flex-grow w-full bg-slate-600 overflow-auto relative"
+        onClick$={handleContainerClick} // <--- Single Tap Listener
+        class="flex-grow w-full bg-slate-600 overflow-auto relative cursor-pointer"
       >
         {isLoading.value && <div class="text-white text-center mt-10">Loading...</div>}
         
@@ -263,10 +251,11 @@ export default component$(() => {
             <div 
                 style={{
                     width: `${zoomState.scale * 100}%`,
-                    // NOTE: Removed transition on width to make scroll sync instant
                     margin: '0 auto', 
                     paddingBottom: '140px' 
                 }}
+                // Prevent click on content from bubbling if needed, 
+                // but usually we want clicks on the PDF to trigger the toggle too.
             >
                 {Array.from({ length: totalPages.value }, (_, i) => i + 1).map((num) => (
                     <div key={num} id={`page-${num}`} class="w-full">
@@ -282,10 +271,18 @@ export default component$(() => {
         )}
       </div>
 
-      {/* BOTTOM CONTROLS CONTAINER */}
-      <div class="fixed bottom-0 left-0 w-full bg-slate-800 border-t border-slate-700 z-30 flex flex-col shadow-2xl pb-6">
+      {/* BOTTOM CONTROLS CONTAINER (Slide animation) */}
+      <div 
+        class={`
+            fixed bottom-0 left-0 w-full bg-slate-800 border-t border-slate-700 z-30 flex flex-col shadow-2xl pb-6
+            transition-transform duration-300 ease-in-out
+            ${showControls.value ? 'translate-y-0' : 'translate-y-full'}
+        `}
+        // Prevent clicks on the control bar from toggling visibility
+        onClick$={(e) => e.stopPropagation()} 
+      >
         
-        {/* ROW 1: FULL WIDTH SAVE BUTTON */}
+        {/* ROW 1: PLACE BOOKMARK BUTTON */}
         <button 
             onClick$={() => saveAction.submit({ bookId: bookSignal.value?.id, page: currentPage.value })}
             disabled={saveAction.isRunning}
@@ -295,7 +292,7 @@ export default component$(() => {
                 ${saveAction.isRunning ? 'bg-slate-700 text-slate-400' : 'bg-blue-600 text-white hover:bg-blue-500'}
             `}
         >
-            {saveAction.isRunning ? 'Saving Progress...' : 'Save Current Page'}
+            {saveAction.isRunning ? 'Placing Bookmark...' : 'Place Bookmark Here'}
         </button>
 
         {/* ROW 2: Zoom Slider */}
@@ -311,7 +308,7 @@ export default component$(() => {
                 value={zoomState.scale}
                 onInput$={(e) => {
                     const val = parseFloat((e.target as HTMLInputElement).value);
-                    updateZoom(val); // This will default to center-screen zoom
+                    updateZoom(val); 
                 }}
                 class="flex-grow h-2 bg-slate-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
             />
