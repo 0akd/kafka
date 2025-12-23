@@ -47,7 +47,7 @@ export const useManageCard = routeAction$<ActionResult>(
       throw new Error('Invalid form submission');
     }
 
-    const data = form as ManageCardForm;
+const data = form as unknown as ManageCardForm;
 
     const methodMap: Record<CardIntent, string> = {
       add: 'POST',

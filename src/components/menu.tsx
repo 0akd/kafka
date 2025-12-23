@@ -1,6 +1,6 @@
 import { component$, useSignal } from '@builder.io/qwik';
 import { Link } from '@builder.io/qwik-city';
-import type { MenuItem } from './menu.config';
+import type { MenuItem } from '../../menu.config';
 
 export const DropdownMenu = component$(
   ({ items, level = 0 }: { items: MenuItem[]; level?: number }) => {
