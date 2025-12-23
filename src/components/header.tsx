@@ -1,5 +1,7 @@
 import { component$, useSignal } from '@builder.io/qwik';
 import { Form, Link } from '@builder.io/qwik-city';
+import { DropdownMenu } from './menu';
+import { profileMenu } from '../../menu.config';
 
 interface HeaderProps {
   user: any;
@@ -10,71 +12,77 @@ export const Header = component$(({ user, logoutAction }: HeaderProps) => {
   const isDropdownOpen = useSignal(false);
 
   return (
-    <header class="bg-slate-900 text-white py-6 px-6 shadow-md">
-      <div class="max-w-[1400px] mx-auto flex justify-between items-center">
-        {/* Logo & Brand */}
-        <div>
-          <Link href="/" class="text-3xl font-bold hover:text-blue-400 transition-colors">
+    <header class="bg-slate-900 text-white py-4 px-6 shadow-md">
+      <div class="max-w-[1400px] mx-auto flex items-center justify-between">
+
+        {/* LEFT: Profile Icon */}
+        <div class="relative">
+          <button
+            onClick$={() => (isDropdownOpen.value = !isDropdownOpen.value)}
+            class="w-10 h-10 rounded-full overflow-hidden border border-slate-700 bg-slate-800 flex items-center justify-center hover:ring-2 hover:ring-blue-400 transition"
+          >
+            {user?.picture ? (
+              <img
+                src={user.picture}
+                alt="Profile"
+                class="w-full h-full object-cover"
+              />
+            ) : (
+              <span class="text-slate-400 text-lg">👤</span>
+            )}
+          </button>
+
+          {isDropdownOpen.value && (
+            <div class="absolute left-0 mt-2 w-56 bg-white rounded-lg shadow-xl z-50 border border-slate-200">
+              {user ? (
+                <>
+                  <div class="px-4 py-3 border-b">
+                    <p class="text-sm font-bold text-slate-900">{user.name}</p>
+                    <p class="text-xs text-slate-500">{user.email}</p>
+                  </div>
+
+                  {/* 🔑 NESTED MENU HERE */}
+                  <DropdownMenu items={profileMenu} />
+                </>
+              ) : (
+                <div class="px-4 py-3 text-sm text-slate-600">
+                  Not logged in
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* CENTER: Brand */}
+        <div class="text-center">
+          <Link href="/" class="text-2xl font-bold hover:text-blue-400">
             Kafka Book Store
           </Link>
-          <p class="text-slate-400 mt-1 hidden sm:block">
-            Master event streaming with our curated collection.
+          <p class="text-slate-400 text-sm hidden sm:block">
+            Master event streaming with curated books
           </p>
         </div>
 
-        {/* Navigation & Auth */}
-        <div class="flex items-center gap-6">
-          {/* Part Link */}
-          <Link 
-            href="/part" 
-            class="text-sm font-medium hover:text-blue-400 transition-colors"
-          >
+        {/* RIGHT: Logout / Login */}
+        <div class="flex items-center gap-4">
+          <Link href="/part" class="text-sm font-medium hover:text-blue-400">
             Go to Part
           </Link>
 
-          {/* User Section */}
-          <div class="relative">
-            {user ? (
-              <div class="relative">
-                <button 
-                  onClick$={() => (isDropdownOpen.value = !isDropdownOpen.value)}
-                  class="flex items-center gap-2 bg-slate-800 p-1 pr-3 rounded-full border border-slate-700 hover:bg-slate-700 transition-all"
-                >
-                  {user.picture && (
-                    <img
-                      src={user.picture}
-                      class="w-8 h-8 rounded-full"
-                      alt="User"
-                      width={32}
-                      height={32}
-                    />
-                  )}
-                  <span class="text-sm font-bold hidden sm:block">{user.name}</span>
-                  <span class="text-[10px]">▼</span>
-                </button>
-
-                {/* Dropdown Menu */}
-                {isDropdownOpen.value && (
-                  <div class="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-xl py-2 z-[100] border border-slate-200">
-                     <div class="px-4 py-2 border-b border-slate-100 sm:hidden">
-                        <p class="text-xs font-bold text-slate-900">{user.name}</p>
-                     </div>
-                     <Form action={logoutAction}>
-                      <button 
-                        type="submit"
-                        class="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 font-bold"
-                      >
-                        Logout
-                      </button>
-                    </Form>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div id="google-btn-container" class="shadow-md rounded bg-white overflow-hidden"></div>
-            )}
-          </div>
+          {user ? (
+            <Form action={logoutAction}>
+              <button
+                type="submit"
+                class="px-4 py-2 text-sm font-bold text-red-500 border border-red-500 rounded hover:bg-red-500 hover:text-white transition"
+              >
+                Logout
+              </button>
+            </Form>
+          ) : (
+            <div id="google-btn-container" class="bg-white rounded shadow" />
+          )}
         </div>
+
       </div>
     </header>
   );

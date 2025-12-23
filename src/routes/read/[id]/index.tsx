@@ -64,7 +64,11 @@ export default component$(() => {
   const touchStartDist = useSignal(0);
   const startWidth = useSignal(0);
   const startHeight = useSignal(0);
-  const basePageWidth = useSignal(0); // To prevent zooming out too much
+  const basePageWidth = useSignal(0);
+  
+  // Store scroll position at pinch start
+  const scrollAtPinchStart = useStore<{ left: number; top: number }>({ left: 0, top: 0 });
+  const pinchCenter = useStore<{ x: number; y: number }>({ x: 0, y: 0 });
   
   const pdfState = useStore<{ doc: any }>({ doc: undefined });
 
@@ -77,16 +81,13 @@ export default component$(() => {
         const containerWidth = containerRef.value.clientWidth;
         const pixelRatio = window.devicePixelRatio || 1;
         
-        // Initial fit to width
         const unscaledViewport = page.getViewport({ scale: 1 });
         const scale = (containerWidth - 20) / unscaledViewport.width; 
         
-        // Store base width for limits
         const displayWidth = Math.floor(unscaledViewport.width * scale);
         const displayHeight = Math.floor(unscaledViewport.height * scale);
         basePageWidth.value = displayWidth;
 
-        // High Res Render (Render at 2x quality for better zoom clarity)
         const outputScale = scale * pixelRatio * 2; 
         const viewport = page.getViewport({ scale: outputScale });
 
@@ -94,11 +95,8 @@ export default component$(() => {
         const context = canvas.getContext('2d');
 
         if (context) {
-            // Internal Resolution (High Quality)
             canvas.width = viewport.width;
             canvas.height = viewport.height;
-
-            // Display Size (CSS - Starts at fit-to-screen)
             canvas.style.width = `${displayWidth}px`;
             canvas.style.height = `${displayHeight}px`;
 
@@ -116,14 +114,13 @@ export default component$(() => {
     if (newPage >= 1 && newPage <= totalPages.value) {
         currentPage.value = newPage;
         renderPage(newPage);
-        // Reset scroll on page change
         if(containerRef.value) containerRef.value.scrollTop = 0;
     }
   });
 
-  // --- NEW PINCH LOGIC (Direct Size Update) ---
+  // --- FIXED PINCH LOGIC ---
   const handleTouchStart = $((e: TouchEvent) => {
-    if (e.touches.length === 2 && canvasRef.value) {
+    if (e.touches.length === 2 && canvasRef.value && containerRef.value) {
       const t1 = e.touches[0];
       const t2 = e.touches[1];
       
@@ -135,6 +132,15 @@ export default component$(() => {
       const rect = canvasRef.value.getBoundingClientRect();
       startWidth.value = rect.width;
       startHeight.value = rect.height;
+      
+      // Store initial scroll position
+      scrollAtPinchStart.left = containerRef.value.scrollLeft;
+      scrollAtPinchStart.top = containerRef.value.scrollTop;
+      
+      // Calculate pinch center relative to container's content (including scroll)
+      const containerRect = containerRef.value.getBoundingClientRect();
+      pinchCenter.x = ((t1.clientX + t2.clientX) / 2) - containerRect.left + scrollAtPinchStart.left;
+      pinchCenter.y = ((t1.clientY + t2.clientY) / 2) - containerRect.top + scrollAtPinchStart.top;
     }
   });
 
@@ -144,7 +150,7 @@ export default component$(() => {
 
     // 2 Fingers: Handle Zoom manually
     if (e.touches.length === 2 && canvasRef.value && containerRef.value) {
-      e.preventDefault(); // Stop browser zoom
+      e.preventDefault();
 
       const t1 = e.touches[0];
       const t2 = e.touches[1];
@@ -157,7 +163,7 @@ export default component$(() => {
         let newWidth = startWidth.value * scaleFactor;
         let newHeight = startHeight.value * scaleFactor;
 
-        // Limit Zoom Out (Don't go smaller than screen width)
+        // Limit Zoom Out
         if (newWidth < basePageWidth.value) {
              newWidth = basePageWidth.value;
              newHeight = (basePageWidth.value / startWidth.value) * startHeight.value;
@@ -165,32 +171,29 @@ export default component$(() => {
         // Limit Zoom In (Max 5x)
         if (newWidth > basePageWidth.value * 5) return;
 
-        // Apply new size to CSS directly
-        // This forces the container to re-calculate scrollbars
-        const oldWidth = parseFloat(canvasRef.value.style.width || '0');
+        // Apply new size
         canvasRef.value.style.width = `${newWidth}px`;
         canvasRef.value.style.height = `${newHeight}px`;
 
-        // --- SMART SCROLLING (Keep zoom centered) ---
-        // Find center of pinch relative to the container
-        const rect = containerRef.value.getBoundingClientRect();
-        const pinchCenterX = ((t1.clientX + t2.clientX) / 2) - rect.left + containerRef.value.scrollLeft;
-        const pinchCenterY = ((t1.clientY + t2.clientY) / 2) - rect.top + containerRef.value.scrollTop;
+        // --- FIXED SCROLL ADJUSTMENT ---
+        // Calculate how much the content has grown
+        const widthRatio = newWidth / startWidth.value;
+        const heightRatio = newHeight / startHeight.value;
 
-        // Ratio of change
-        const ratio = newWidth / oldWidth;
+        // Adjust scroll to keep the pinch center point stable
+        const newScrollLeft = (pinchCenter.x * widthRatio) - (pinchCenter.x - scrollAtPinchStart.left);
+        const newScrollTop = (pinchCenter.y * heightRatio) - (pinchCenter.y - scrollAtPinchStart.top);
 
-        // Adjust scroll to keep pinch center stable
-        if (ratio !== 1) {
-            containerRef.value.scrollLeft = (pinchCenterX * ratio) - (((t1.clientX + t2.clientX) / 2) - rect.left);
-            containerRef.value.scrollTop = (pinchCenterY * ratio) - (((t1.clientY + t2.clientY) / 2) - rect.top);
-        }
-        
-        // Update start values for smooth continuous pinch
-        touchStartDist.value = currentDist;
-        startWidth.value = newWidth;
-        startHeight.value = newHeight;
+        containerRef.value.scrollLeft = newScrollLeft;
+        containerRef.value.scrollTop = newScrollTop;
       }
+    }
+  });
+
+  const handleTouchEnd = $((e: TouchEvent) => {
+    // Reset when pinch ends
+    if (e.touches.length < 2) {
+      touchStartDist.value = 0;
     }
   });
 
@@ -221,13 +224,14 @@ export default component$(() => {
     const el = containerRef.value;
     if (!el) return;
 
-    // Use passive: false to allow preventDefault on 2-finger touch
     el.addEventListener('touchstart', handleTouchStart, { passive: false });
     el.addEventListener('touchmove', handleTouchMove, { passive: false });
+    el.addEventListener('touchend', handleTouchEnd, { passive: false });
     
     cleanup(() => {
         el.removeEventListener('touchstart', handleTouchStart);
         el.removeEventListener('touchmove', handleTouchMove);
+        el.removeEventListener('touchend', handleTouchEnd);
     });
   });
 
@@ -249,21 +253,20 @@ export default component$(() => {
             <button onClick$={() => changePage(currentPage.value + 1)} class="text-white px-2">➡</button>
         </div>
       </div>
-{/* SCROLLABLE CONTAINER */}
-<div 
-  ref={containerRef} 
-  class="flex-grow w-full bg-slate-600 overflow-auto relative touch-none" // touch-none zoom control ke liye better hai
->
-  {/* Canvas wrapper - Removed justify-center/items-center classes */}
-  <div class="min-h-full min-w-full flex p-2">
-       <canvas 
-         ref={canvasRef} 
-         style={{ margin: 'auto' }} // Yeh magic property hai: Center bhi rakhega aur scroll bhi block nahi karega
-         class="shadow-2xl bg-white block" 
-       />
-  </div>
-</div>
- 
+
+      {/* SCROLLABLE CONTAINER */}
+      <div 
+        ref={containerRef} 
+        class="flex-grow w-full bg-slate-600 overflow-auto relative"
+      >
+        <div class="min-h-full min-w-full flex p-2">
+             <canvas 
+               ref={canvasRef} 
+               style={{ margin: 'auto' }}
+               class="shadow-2xl bg-white block" 
+             />
+        </div>
+      </div>
     </div>
   );
 });
