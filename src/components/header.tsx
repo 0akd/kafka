@@ -3,7 +3,6 @@ import { Form, Link, type ActionStore } from '@builder.io/qwik-city';
 import { DropdownMenu } from './menu';
 import { profileMenu } from '../../menu.config';
 
-// Robust Type Definition
 declare global {
   interface Window {
     google: {
@@ -18,38 +17,38 @@ declare global {
   }
 }
 
+// ✅ FIX 1: Update the Interface to match your Action return types
 interface HeaderProps {
-  user: any;
-  logoutAction: ActionStore<void, any>; // Type for the Logout Action
-  loginAction: ActionStore<void, any>;  // Type for the Login Action
+  user: any; // Ideally replace 'any' with your User type interface later
+  
+  // Logout returns { success: boolean }
+  logoutAction: ActionStore<{ success: boolean }, any>; 
+  
+  // Login returns { success: boolean, error?: string }
+  loginAction: ActionStore<{ success: boolean; error?: string }, any>;  
 }
 
 export const Header = component$(({ user, logoutAction, loginAction }: HeaderProps) => {
   const isDropdownOpen = useSignal(false);
   const googleBtnRef = useSignal<HTMLElement>(); 
 
-  // ✅ GOOGLE AUTH LOGIC (Centralized here)
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track }) => {
     track(() => user);
 
-    // If user is already logged in, do nothing
     if (user) return;
 
-    // 1. Function to init Google Button
     const initGoogle = () => {
       if (window.google?.accounts?.id && googleBtnRef.value) {
         window.google.accounts.id.initialize({
-          client_id: import.meta.env.PUBLIC_GOOGLE_CLIENT_ID, // Use env variable
+          client_id: import.meta.env.PUBLIC_GOOGLE_CLIENT_ID,
           callback: (response: any) => {
-            // 2. TRIGGER SERVER ACTION
-            // Find the hidden form fields and submit them programmatically
             const tokenInput = document.getElementById('google-token-input') as HTMLInputElement;
             const submitBtn = document.getElementById('google-submit-btn') as HTMLButtonElement;
             
             if (tokenInput && submitBtn) {
               tokenInput.value = response.credential;
-              submitBtn.click(); // This triggers loginAction
+              submitBtn.click(); 
             }
           },
         });
@@ -62,7 +61,6 @@ export const Header = component$(({ user, logoutAction, loginAction }: HeaderPro
       }
     };
 
-    // 3. Load Script if not present, otherwise just init
     if (!window.google?.accounts) {
       const script = document.createElement('script');
       script.src = 'https://accounts.google.com/gsi/client';
