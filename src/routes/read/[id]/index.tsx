@@ -163,13 +163,19 @@ export default component$(() => {
     try {
       const pdfjs = await import('pdfjs-dist');
       pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
-      const loadingTask = pdfjs.getDocument(bookSignal.value.pdfUrl);
+      
+      // FIX 1: Pass a single object to getDocument
+      const loadingTask = pdfjs.getDocument({ url: bookSignal.value.pdfUrl });
+      
       const pdf = await loadingTask.promise;
       pdfDoc.value = noSerialize(pdf);
       totalPages.value = pdf.numPages;
+      
       setTimeout(() => {
-        if(bookSignal.value && bookSignal.value.initialPage > 1) {
-             document.getElementById(`page-${bookSignal.value.initialPage}`)?.scrollIntoView({ behavior: 'auto', block: 'start' });
+        // FIX 2: Added optional chaining and safe fallback
+        const initialPage = bookSignal.value?.initialPage ?? 1;
+        if(initialPage > 1) {
+             document.getElementById(`page-${initialPage}`)?.scrollIntoView({ behavior: 'auto', block: 'start' });
         }
       }, 500);
       isLoading.value = false;
@@ -212,10 +218,9 @@ export default component$(() => {
         {!isLoading.value && pdfDoc.value && containerWidth.value > 0 && (
             <div 
                 style={{
-                    // FIX: REMOVED minWidth: '100%' so it can shrink below viewport size
                     width: `${zoomState.scale * 100}%`,
                     transition: 'width 0.1s linear', 
-                    margin: '0 auto', // Keeps it centered when < 100%
+                    margin: '0 auto', 
                     paddingBottom: '140px' 
                 }}
             >
@@ -241,16 +246,16 @@ export default component$(() => {
             onClick$={() => saveAction.submit({ bookId: bookSignal.value?.id, page: currentPage.value })}
             disabled={saveAction.isRunning}
             class={`
-                w-full py-1 text-center font-bold text-lg uppercase tracking-wider
+                w-full py-4 text-center font-bold text-lg uppercase tracking-wider
                 transition active:bg-blue-700
                 ${saveAction.isRunning ? 'bg-slate-700 text-slate-400' : 'bg-blue-600 text-white hover:bg-blue-500'}
             `}
         >
-            {saveAction.isRunning ? 'Saving Progress...' : 'BookMark'}
+            {saveAction.isRunning ? 'Saving Progress...' : 'Save Current Page'}
         </button>
 
         {/* ROW 2: Zoom Slider */}
-        <div class="flex items-center gap-4 px-4 py-2 bg-slate-900/50">
+        <div class="flex items-center gap-4 px-4 py-4 bg-slate-900/50">
             <span class="text-slate-400 text-xs font-mono w-10 text-right">
                 {Math.round(zoomState.scale * 100)}%
             </span>
