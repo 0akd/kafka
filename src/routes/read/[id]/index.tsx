@@ -1,326 +1,488 @@
-import { 
-  component$, 
-  useSignal, 
-  useVisibleTask$, 
-  useStore,
-  noSerialize, 
-  $
-} from '@builder.io/qwik';
-import { routeLoader$, routeAction$ } from '@builder.io/qwik-city';
-import type { NoSerialize } from '@builder.io/qwik';
+import { component$, useSignal, useVisibleTask$, noSerialize, useStore, $ } from '@builder.io/qwik';
 
-// --- BACKEND LOGIC ---
+import { routeLoader$, routeAction$, Link, Form } from '@builder.io/qwik-city';
+
+
+// --- BACKEND LOGIC (Same as before) ---
+
 export const useSavePage = routeAction$(async (data, { cookie, fail }) => {
-  const backendUrl = import.meta.env.PUBLIC_BACKEND_URL;
-  const userCookie = cookie.get('user_session');
-  if (!userCookie?.value) return fail(401, { message: 'Login required' });
-  const user = JSON.parse(userCookie.value);
-  const page = Number(data.page);
-  
-  try {
-    await fetch(`${backendUrl}/api/progress`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: user.id, bookId: Number(data.bookId), page }),
-    });
-    return { success: true };
-  } catch (err) {
-    return fail(500, { message: 'Failed to save' });
-  }
+
+const backendUrl = import.meta.env.PUBLIC_BACKEND_URL;
+
+const userCookie = cookie.get('user_session');
+
+if (!userCookie?.value) return fail(401, { message: 'Login required' });
+
+const user = JSON.parse(userCookie.value);
+
+const payload = { userId: user.id, bookId: Number(data.bookId), page: Number(data.page) };
+
+try {
+
+await fetch(`${backendUrl}/api/progress`, {
+
+method: 'POST',
+
+headers: { 'Content-Type': 'application/json' },
+
+body: JSON.stringify(payload),
+
 });
+
+return { success: true };
+
+} catch (err) {
+
+return fail(500, { message: 'Failed to save' });
+
+}
+
+});
+
 
 export const useReaderData = routeLoader$(async ({ params, status, cookie }) => {
-  const backendUrl = import.meta.env.PUBLIC_BACKEND_URL?.replace(/\/+$/, '');
-  const bookId = Number(params.id);
-  let bookData = null;
-  try {
-    const res = await fetch(`${backendUrl}/api/books/${bookId}`);
-    if (!res.ok) throw new Error();
-    const json = await res.json();
-    bookData = Array.isArray(json.data || json) ? (json.data || json)[0] : (json.data || json);
-  } catch {
-    status(404); return null;
-  }
-  const originalPdfUrl = bookData?.pdfUrl || bookData?.pdf_url;
-  if (!originalPdfUrl) return { error: 'No PDF available' };
-  const proxyUrl = `${backendUrl}/api/proxy-pdf?url=${encodeURIComponent(originalPdfUrl)}`;
 
-  let savedPage = 1;
-  const userCookie = cookie.get('user_session');
-  if (userCookie?.value) {
-    const user = JSON.parse(userCookie.value);
-    try {
-      const pRes = await fetch(`${backendUrl}/api/progress?userId=${user.id}&bookId=${bookId}`);
-      if (pRes.ok) savedPage = (await pRes.json()).page || 1;
-    } catch {}
-  }
-  return { id: bookData.id, pdfUrl: proxyUrl, title: bookData.title, initialPage: savedPage };
+const backendUrl = import.meta.env.PUBLIC_BACKEND_URL?.replace(/\/+$/, '');
+
+const bookId = Number(params.id);
+
+let bookData = null;
+
+try {
+
+const res = await fetch(`${backendUrl}/api/books/${bookId}`);
+
+if (!res.ok) throw new Error();
+
+const json = await res.json();
+
+bookData = Array.isArray(json.data || json) ? (json.data || json)[0] : (json.data || json);
+
+} catch {
+
+status(404); return null;
+
+}
+
+const originalPdfUrl = bookData?.pdfUrl || bookData?.pdf_url;
+
+if (!originalPdfUrl) return { error: 'No PDF available' };
+
+const proxyUrl = `${backendUrl}/api/proxy-pdf?url=${encodeURIComponent(originalPdfUrl)}`;
+
+let savedPage = 1;
+
+const userCookie = cookie.get('user_session');
+
+if (userCookie?.value) {
+
+const user = JSON.parse(userCookie.value);
+
+try {
+
+const pRes = await fetch(`${backendUrl}/api/progress?userId=${user.id}&bookId=${bookId}`);
+
+if (pRes.ok) savedPage = (await pRes.json()).page || 1;
+
+} catch {}
+
+}
+
+return { id: bookData.id, pdfUrl: proxyUrl, title: bookData.title, initialPage: savedPage };
+
 });
 
-// --- SUB-COMPONENT: PDF Page ---
-export const PDFPage = component$(({ pageNum, doc, onInView, width }: any) => {
-  const canvasRef = useSignal<HTMLCanvasElement>();
-  const containerRef = useSignal<HTMLDivElement>();
-  const isRendered = useSignal(false);
 
-  const render = $(async () => {
-    if (!doc || !canvasRef.value || !width || width <= 0) return;
-    
-    try {
-      const page = await doc.getPage(pageNum);
-      const pixelRatio = window.devicePixelRatio || 1;
-      const unscaledViewport = page.getViewport({ scale: 1 });
-      const scale = width / unscaledViewport.width;
-      const viewport = page.getViewport({ scale: scale * pixelRatio });
+// --- UI COMPONENT ---
 
-      const canvas = canvasRef.value;
-      const context = canvas.getContext('2d');
-      if (context) {
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        canvas.style.width = '100%'; 
-        canvas.style.height = 'auto';
-        await page.render({ canvasContext: context, viewport: viewport }).promise;
-        isRendered.value = true;
-      }
-    } catch (e) { console.warn(e); }
-  });
-
-  useVisibleTask$(({ track }) => {
-    track(() => width);
-    const t = setTimeout(() => {
-        if(isRendered.value) requestAnimationFrame(() => render());
-    }, 100);
-    return () => clearTimeout(t);
-  });
-
-  useVisibleTask$(({ cleanup }) => {
-    if (!containerRef.value) return;
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-            render();
-            if (entry.intersectionRatio > 0.5) onInView(pageNum);
-        }
-      });
-    }, { threshold: [0.1, 0.5] });
-    observer.observe(containerRef.value);
-    cleanup(() => observer.disconnect());
-  });
-
-  return (
-    <div ref={containerRef} class="w-full flex justify-center bg-slate-500 my-2" style={{ minHeight: '300px' }}>
-      <canvas ref={canvasRef} class="bg-white block shadow-lg" />
-    </div>
-  );
-});
-
-// --- MAIN COMPONENT ---
 export default component$(() => {
-  const bookSignal = useReaderData();
-  const saveAction = useSavePage();
-  
-  const currentPage = useSignal(Math.max(1, bookSignal.value?.initialPage || 1));
-  const totalPages = useSignal(0);
-  const isLoading = useSignal(true);
-  const pdfDoc = useSignal<NoSerialize<any>>();
-  const containerWidth = useSignal(0);
-  const mainContainerRef = useSignal<HTMLDivElement>();
-  
-  // --- UI CONTROLS STATE ---
-  const showControls = useSignal(true);
 
-  const zoomState = useStore({
-    scale: 1.0,     
-    baseScale: 1.0, 
-    startDist: 0
-  });
+const bookSignal = useReaderData();
 
-  const updateZoom = $((newScale: number, centerX?: number, centerY?: number) => {
-     const clampedScale = Math.min(Math.max(newScale, 0.5), 3.0);
-     if (Math.abs(clampedScale - zoomState.scale) < 0.01) return;
+const saveAction = useSavePage();
 
-     const el = mainContainerRef.value;
-     if (!el) return;
+const currentPage = useSignal(bookSignal.value?.initialPage || 1);
 
-     const oldScale = zoomState.scale;
-     const ratio = clampedScale / oldScale;
-     const rect = el.getBoundingClientRect();
-     const viewportCX = centerX !== undefined ? (centerX - rect.left) : (rect.width / 2);
-     const viewportCY = centerY !== undefined ? (centerY - rect.top) : (rect.height / 2);
+const totalPages = useSignal(0);
 
-     const docX = el.scrollLeft + viewportCX;
-     const docY = el.scrollTop + viewportCY;
+const isLoading = useSignal(true);
 
-     zoomState.scale = clampedScale;
+const loadError = useSignal<string>('');
 
-     requestAnimationFrame(() => {
-        el.scrollLeft = (docX * ratio) - viewportCX;
-        el.scrollTop = (docY * ratio) - viewportCY;
-     });
-  });
+const canvasRef = useSignal<HTMLCanvasElement>();
 
-  const handleTouchStart = $((e: TouchEvent) => {
-    if (e.touches.length === 2) {
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      zoomState.startDist = dist;
-      zoomState.baseScale = zoomState.scale;
-    }
-  });
+const containerRef = useSignal<HTMLDivElement>();
 
-  const handleTouchMove = $((e: TouchEvent) => {
-    if (e.touches.length === 2) {
-      e.preventDefault(); 
-      const t1 = e.touches[0];
-      const t2 = e.touches[1];
-      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-      const midX = (t1.clientX + t2.clientX) / 2;
-      const midY = (t1.clientY + t2.clientY) / 2;
+// State for Pinch Logic
 
-      if (zoomState.startDist > 0) {
-        const newScale = zoomState.baseScale * (dist / zoomState.startDist);
-        updateZoom(newScale, midX, midY);
-      }
-    }
-  });
+const touchStartDist = useSignal(0);
 
-  useVisibleTask$(async () => {
-    if (!bookSignal.value?.pdfUrl) return;
-    try {
-      const pdfjs = await import('pdfjs-dist');
-      pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
-      
-      const loadingTask = pdfjs.getDocument({ url: bookSignal.value.pdfUrl });
-      const pdf = await loadingTask.promise;
-      pdfDoc.value = noSerialize(pdf);
-      totalPages.value = pdf.numPages;
-      
-      setTimeout(() => {
-        const initialPage = bookSignal.value?.initialPage ?? 1;
-        if(initialPage > 1) {
-             document.getElementById(`page-${initialPage}`)?.scrollIntoView({ behavior: 'auto', block: 'start' });
-        }
-      }, 500);
-      isLoading.value = false;
-    } catch { isLoading.value = false; }
-  });
+const startWidth = useSignal(0);
 
-  useVisibleTask$(({ cleanup }) => {
-    if (!mainContainerRef.value) return;
-    containerWidth.value = mainContainerRef.value.clientWidth;
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) containerWidth.value = entry.contentRect.width;
-    });
-    resizeObserver.observe(mainContainerRef.value);
-    
-    const el = mainContainerRef.value;
-    el.addEventListener('touchstart', handleTouchStart, { passive: true });
-    el.addEventListener('touchmove', handleTouchMove, { passive: false });
-    
-    cleanup(() => {
-        resizeObserver.disconnect();
-        el.removeEventListener('touchstart', handleTouchStart);
-        el.removeEventListener('touchmove', handleTouchMove);
-    });
-  });
+const startHeight = useSignal(0);
 
-  const handlePageVisible = $((num: number) => { 
-    if (num >= 1) currentPage.value = num; 
-  });
+const basePageWidth = useSignal(0);
 
-  // Toggle controls on single tap
-  const handleContainerClick = $(() => {
-    showControls.value = !showControls.value;
-  });
+// Store scroll position at pinch start
 
-  return (
-    <div class="h-[100dvh] flex flex-col bg-slate-900 overflow-hidden relative">
-      
-      {/* SCROLL CONTAINER (Tapping here toggles UI) */}
-      <div 
-        ref={mainContainerRef}
-        onClick$={handleContainerClick} // <--- Single Tap Listener
-        class="flex-grow w-full bg-slate-600 overflow-auto relative cursor-pointer"
-      >
-        {isLoading.value && <div class="text-white text-center mt-10">Loading...</div>}
-        
-        {!isLoading.value && pdfDoc.value && containerWidth.value > 0 && (
-            <div 
-                style={{
-                    width: `${zoomState.scale * 100}%`,
-                    margin: '0 auto', 
-                    paddingBottom: '140px' 
-                }}
-                // Prevent click on content from bubbling if needed, 
-                // but usually we want clicks on the PDF to trigger the toggle too.
-            >
-                {Array.from({ length: totalPages.value }, (_, i) => i + 1).map((num) => (
-                    <div key={num} id={`page-${num}`} class="w-full">
-                        <PDFPage 
-                            pageNum={num} 
-                            doc={pdfDoc.value} 
-                            width={containerWidth.value * zoomState.scale} 
-                            onInView={handlePageVisible} 
-                        />
-                    </div>
-                ))}
-            </div>
-        )}
-      </div>
+const scrollAtPinchStart = useStore<{ left: number; top: number }>({ left: 0, top: 0 });
 
-      {/* BOTTOM CONTROLS CONTAINER (Slide animation) */}
-      <div 
-        class={`
-            fixed bottom-0 left-0 w-full bg-slate-800 border-t border-slate-700 z-30 flex flex-col shadow-2xl pb-6
-            transition-transform duration-300 ease-in-out
-            ${showControls.value ? 'translate-y-0' : 'translate-y-full'}
-        `}
-        // Prevent clicks on the control bar from toggling visibility
-        onClick$={(e) => e.stopPropagation()} 
-      >
-        
-        {/* ROW 1: PLACE BOOKMARK BUTTON */}
-        <button 
-            onClick$={() => saveAction.submit({ bookId: bookSignal.value?.id, page: currentPage.value })}
-            disabled={saveAction.isRunning}
-            class={`
-                w-full py-4 text-center font-bold text-lg uppercase tracking-wider
-                transition active:bg-blue-700
-                ${saveAction.isRunning ? 'bg-slate-700 text-slate-400' : 'bg-blue-600 text-white hover:bg-blue-500'}
-            `}
-        >
-            {saveAction.isRunning ? 'Placing Bookmark...' : 'Place Bookmark Here'}
-        </button>
+const pinchCenter = useStore<{ x: number; y: number }>({ x: 0, y: 0 });
 
-        {/* ROW 2: Zoom Slider */}
-        <div class="flex items-center gap-4 px-4 py-4 bg-slate-900/50">
-            <span class="text-slate-400 text-xs font-mono w-10 text-right">
-                {Math.round(zoomState.scale * 100)}%
-            </span>
-            <input 
-                type="range" 
-                min="0.5" 
-                max="3.0" 
-                step="0.1"
-                value={zoomState.scale}
-                onInput$={(e) => {
-                    const val = parseFloat((e.target as HTMLInputElement).value);
-                    updateZoom(val); 
-                }}
-                class="flex-grow h-2 bg-slate-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
-            />
-            <button 
-                onClick$={() => updateZoom(1.0)} 
-                class="text-xs text-slate-400 hover:text-white"
-            >
-                Reset
-            </button>
-        </div>
+const pdfState = useStore<{ doc: any }>({ doc: undefined });
 
-      </div>
-    </div>
-  );
+
+// Render Page
+
+const renderPage = $(async (num: number) => {
+
+if (!pdfState.doc || !canvasRef.value || !containerRef.value) return;
+
+
+try {
+
+const page = await pdfState.doc.getPage(num);
+
+const containerWidth = containerRef.value.clientWidth;
+
+const pixelRatio = window.devicePixelRatio || 1;
+
+const unscaledViewport = page.getViewport({ scale: 1 });
+
+const scale = (containerWidth - 20) / unscaledViewport.width;
+
+const displayWidth = Math.floor(unscaledViewport.width * scale);
+
+const displayHeight = Math.floor(unscaledViewport.height * scale);
+
+basePageWidth.value = displayWidth;
+
+
+const outputScale = scale * pixelRatio * 2;
+
+const viewport = page.getViewport({ scale: outputScale });
+
+
+const canvas = canvasRef.value;
+
+const context = canvas.getContext('2d');
+
+
+if (context) {
+
+canvas.width = viewport.width;
+
+canvas.height = viewport.height;
+
+canvas.style.width = `${displayWidth}px`;
+
+canvas.style.height = `${displayHeight}px`;
+
+
+await page.render({
+
+canvasContext: context,
+
+viewport: viewport,
+
+}).promise;
+
+}
+
+} catch (e) {
+
+console.error("Render Error:", e);
+
+}
+
 });
+
+
+const changePage = $((newPage: number) => {
+
+if (newPage >= 1 && newPage <= totalPages.value) {
+
+currentPage.value = newPage;
+
+renderPage(newPage);
+
+if(containerRef.value) containerRef.value.scrollTop = 0;
+
+}
+
+});
+
+
+// --- FIXED PINCH LOGIC ---
+
+const handleTouchStart = $((e: TouchEvent) => {
+
+if (e.touches.length === 2 && canvasRef.value && containerRef.value) {
+
+const t1 = e.touches[0];
+
+const t2 = e.touches[1];
+
+// Calculate initial distance
+
+const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+
+touchStartDist.value = dist;
+
+// Capture current size
+
+const rect = canvasRef.value.getBoundingClientRect();
+
+startWidth.value = rect.width;
+
+startHeight.value = rect.height;
+
+// Store initial scroll position
+
+scrollAtPinchStart.left = containerRef.value.scrollLeft;
+
+scrollAtPinchStart.top = containerRef.value.scrollTop;
+
+// Calculate pinch center relative to container's content (including scroll)
+
+const containerRect = containerRef.value.getBoundingClientRect();
+
+pinchCenter.x = ((t1.clientX + t2.clientX) / 2) - containerRect.left + scrollAtPinchStart.left;
+
+pinchCenter.y = ((t1.clientY + t2.clientY) / 2) - containerRect.top + scrollAtPinchStart.top;
+
+}
+
+});
+
+
+const handleTouchMove = $((e: TouchEvent) => {
+
+// 1 Finger: Let browser handle Pan/Scroll naturally
+
+if (e.touches.length === 1) return;
+
+
+// 2 Fingers: Handle Zoom manually
+
+if (e.touches.length === 2 && canvasRef.value && containerRef.value) {
+
+e.preventDefault();
+
+
+const t1 = e.touches[0];
+
+const t2 = e.touches[1];
+
+const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+
+
+if (touchStartDist.value > 0) {
+
+const scaleFactor = currentDist / touchStartDist.value;
+
+// Calculate new dimensions
+
+let newWidth = startWidth.value * scaleFactor;
+
+let newHeight = startHeight.value * scaleFactor;
+
+
+// Limit Zoom Out
+
+if (newWidth < basePageWidth.value) {
+
+newWidth = basePageWidth.value;
+
+newHeight = (basePageWidth.value / startWidth.value) * startHeight.value;
+
+}
+
+// Limit Zoom In (Max 5x)
+
+if (newWidth > basePageWidth.value * 5) return;
+
+
+// Apply new size
+
+canvasRef.value.style.width = `${newWidth}px`;
+
+canvasRef.value.style.height = `${newHeight}px`;
+
+
+// --- FIXED SCROLL ADJUSTMENT ---
+
+// Calculate how much the content has grown
+
+const widthRatio = newWidth / startWidth.value;
+
+const heightRatio = newHeight / startHeight.value;
+
+
+// Adjust scroll to keep the pinch center point stable
+
+const newScrollLeft = (pinchCenter.x * widthRatio) - (pinchCenter.x - scrollAtPinchStart.left);
+
+const newScrollTop = (pinchCenter.y * heightRatio) - (pinchCenter.y - scrollAtPinchStart.top);
+
+
+containerRef.value.scrollLeft = newScrollLeft;
+
+containerRef.value.scrollTop = newScrollTop;
+
+}
+
+}
+
+});
+
+
+const handleTouchEnd = $((e: TouchEvent) => {
+
+// Reset when pinch ends
+
+if (e.touches.length < 2) {
+
+touchStartDist.value = 0;
+
+}
+
+});
+
+
+useVisibleTask$(async () => {
+
+if (!bookSignal.value?.pdfUrl || bookSignal.value.error) {
+
+loadError.value = bookSignal.value?.error || "No PDF URL found";
+
+isLoading.value = false;
+
+return;
+
+}
+
+try {
+
+const pdfjs = await import('pdfjs-dist');
+
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+
+const loadingTask = pdfjs.getDocument(bookSignal.value.pdfUrl);
+
+const pdf = await loadingTask.promise;
+
+pdfState.doc = noSerialize(pdf);
+
+totalPages.value = pdf.numPages;
+
+await renderPage(currentPage.value);
+
+isLoading.value = false;
+
+} catch (error: any) {
+
+console.error("PDF Init Error:", error);
+
+loadError.value = "Failed to load PDF.";
+
+isLoading.value = false;
+
+}
+
+});
+
+
+// Attach Listeners
+
+useVisibleTask$(({ cleanup }) => {
+
+const el = containerRef.value;
+
+if (!el) return;
+
+
+el.addEventListener('touchstart', handleTouchStart, { passive: false });
+
+el.addEventListener('touchmove', handleTouchMove, { passive: false });
+
+el.addEventListener('touchend', handleTouchEnd, { passive: false });
+
+cleanup(() => {
+
+el.removeEventListener('touchstart', handleTouchStart);
+
+el.removeEventListener('touchmove', handleTouchMove);
+
+el.removeEventListener('touchend', handleTouchEnd);
+
+});
+
+});
+
+
+if (loadError.value) return <div>Error: {loadError.value}</div>;
+
+
+return (
+
+<div class="h-[100dvh] flex flex-col bg-slate-900 overflow-hidden">
+
+{/* HEADER */}
+
+<div class="h-14 bg-slate-800 border-b border-slate-700 flex items-center justify-between px-3 shrink-0 z-20 shadow-md">
+
+<Link href="/" class="text-white text-lg">⬅</Link>
+
+<h2 class="text-white text-sm font-bold">{bookSignal.value?.title}</h2>
+
+<div class="flex gap-2">
+
+<button onClick$={() => changePage(currentPage.value - 1)} class="text-white px-2">⬅</button>
+
+<Form action={saveAction}>
+
+<input type="hidden" name="bookId" value={bookSignal.value?.id} />
+
+<input type="hidden" name="page" value={currentPage.value} />
+
+<button class="bg-blue-600 px-2 rounded text-white text-xs py-1">Save</button>
+
+</Form>
+
+<button onClick$={() => changePage(currentPage.value + 1)} class="text-white px-2">➡</button>
+
+</div>
+
+</div>
+
+
+{/* SCROLLABLE CONTAINER */}
+
+<div
+
+ref={containerRef}
+
+class="flex-grow w-full bg-slate-600 overflow-auto relative"
+
+>
+
+<div class="min-h-full min-w-full flex p-2">
+
+<canvas
+
+ref={canvasRef}
+
+style={{ margin: 'auto' }}
+
+class="shadow-2xl bg-white block"
+
+/>
+
+</div>
+
+</div>
+
+</div>
+
+); })
