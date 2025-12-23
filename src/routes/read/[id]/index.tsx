@@ -1,18 +1,27 @@
-import { component$, useSignal, useVisibleTask$, noSerialize, useStore, $ } from '@builder.io/qwik';
-import { routeLoader$, routeAction$, Link, Form } from '@builder.io/qwik-city';
+import { 
+  component$, 
+  useSignal, 
+  useVisibleTask$, 
+  useStore,
+  noSerialize, 
+  $
+} from '@builder.io/qwik';
+import { routeLoader$, routeAction$ } from '@builder.io/qwik-city';
+import type { NoSerialize } from '@builder.io/qwik';
 
-// --- BACKEND LOGIC (Same as before) ---
+// --- BACKEND LOGIC ---
 export const useSavePage = routeAction$(async (data, { cookie, fail }) => {
   const backendUrl = import.meta.env.PUBLIC_BACKEND_URL;
   const userCookie = cookie.get('user_session');
   if (!userCookie?.value) return fail(401, { message: 'Login required' });
   const user = JSON.parse(userCookie.value);
-  const payload = { userId: user.id, bookId: Number(data.bookId), page: Number(data.page) };
+  const page = Number(data.page);
+  
   try {
     await fetch(`${backendUrl}/api/progress`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ userId: user.id, bookId: Number(data.bookId), page }),
     });
     return { success: true };
   } catch (err) {
@@ -35,6 +44,7 @@ export const useReaderData = routeLoader$(async ({ params, status, cookie }) => 
   const originalPdfUrl = bookData?.pdfUrl || bookData?.pdf_url;
   if (!originalPdfUrl) return { error: 'No PDF available' };
   const proxyUrl = `${backendUrl}/api/proxy-pdf?url=${encodeURIComponent(originalPdfUrl)}`;
+
   let savedPage = 1;
   const userCookie = cookie.get('user_session');
   if (userCookie?.value) {
@@ -47,225 +57,223 @@ export const useReaderData = routeLoader$(async ({ params, status, cookie }) => 
   return { id: bookData.id, pdfUrl: proxyUrl, title: bookData.title, initialPage: savedPage };
 });
 
-// --- UI COMPONENT ---
+// --- SUB-COMPONENT: PDF Page ---
+export const PDFPage = component$(({ pageNum, doc, onInView, width }: any) => {
+  const canvasRef = useSignal<HTMLCanvasElement>();
+  const containerRef = useSignal<HTMLDivElement>();
+  const isRendered = useSignal(false);
+
+  const render = $(async () => {
+    if (!doc || !canvasRef.value || !width || width <= 0) return;
+    
+    try {
+      const page = await doc.getPage(pageNum);
+      const pixelRatio = window.devicePixelRatio || 1;
+      const unscaledViewport = page.getViewport({ scale: 1 });
+      const scale = width / unscaledViewport.width;
+      const viewport = page.getViewport({ scale: scale * pixelRatio });
+
+      const canvas = canvasRef.value;
+      const context = canvas.getContext('2d');
+      if (context) {
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        canvas.style.width = '100%'; 
+        canvas.style.height = 'auto';
+        await page.render({ canvasContext: context, viewport: viewport }).promise;
+        isRendered.value = true;
+      }
+    } catch (e) { console.warn(e); }
+  });
+
+  useVisibleTask$(({ track }) => {
+    track(() => width);
+    const t = setTimeout(() => {
+        if(isRendered.value) requestAnimationFrame(() => render());
+    }, 100);
+    return () => clearTimeout(t);
+  });
+
+  useVisibleTask$(({ cleanup }) => {
+    if (!containerRef.value) return;
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+            render();
+            if (entry.intersectionRatio > 0.5) onInView(pageNum);
+        }
+      });
+    }, { threshold: [0.1, 0.5] });
+    observer.observe(containerRef.value);
+    cleanup(() => observer.disconnect());
+  });
+
+  return (
+    <div ref={containerRef} class="w-full flex justify-center bg-slate-500 my-2" style={{ minHeight: '300px' }}>
+      <canvas ref={canvasRef} class="bg-white block shadow-lg" />
+    </div>
+  );
+});
+
+// --- MAIN COMPONENT ---
 export default component$(() => {
   const bookSignal = useReaderData();
   const saveAction = useSavePage();
   
-  const currentPage = useSignal(bookSignal.value?.initialPage || 1);
+  const currentPage = useSignal(Math.max(1, bookSignal.value?.initialPage || 1));
   const totalPages = useSignal(0);
   const isLoading = useSignal(true);
-  const loadError = useSignal<string>('');
-  
-  const canvasRef = useSignal<HTMLCanvasElement>();
-  const containerRef = useSignal<HTMLDivElement>();
-  
-  // State for Pinch Logic
-  const touchStartDist = useSignal(0);
-  const startWidth = useSignal(0);
-  const startHeight = useSignal(0);
-  const basePageWidth = useSignal(0);
-  
-  // Store scroll position at pinch start
-  const scrollAtPinchStart = useStore<{ left: number; top: number }>({ left: 0, top: 0 });
-  const pinchCenter = useStore<{ x: number; y: number }>({ x: 0, y: 0 });
-  
-  const pdfState = useStore<{ doc: any }>({ doc: undefined });
+  const pdfDoc = useSignal<NoSerialize<any>>();
+  const containerWidth = useSignal(0);
+  const mainContainerRef = useSignal<HTMLDivElement>();
 
-  // Render Page
-  const renderPage = $(async (num: number) => {
-    if (!pdfState.doc || !canvasRef.value || !containerRef.value) return;
-
-    try {
-        const page = await pdfState.doc.getPage(num);
-        const containerWidth = containerRef.value.clientWidth;
-        const pixelRatio = window.devicePixelRatio || 1;
-        
-        const unscaledViewport = page.getViewport({ scale: 1 });
-        const scale = (containerWidth - 20) / unscaledViewport.width; 
-        
-        const displayWidth = Math.floor(unscaledViewport.width * scale);
-        const displayHeight = Math.floor(unscaledViewport.height * scale);
-        basePageWidth.value = displayWidth;
-
-        const outputScale = scale * pixelRatio * 2; 
-        const viewport = page.getViewport({ scale: outputScale });
-
-        const canvas = canvasRef.value;
-        const context = canvas.getContext('2d');
-
-        if (context) {
-            canvas.width = viewport.width;
-            canvas.height = viewport.height;
-            canvas.style.width = `${displayWidth}px`;
-            canvas.style.height = `${displayHeight}px`;
-
-            await page.render({
-                canvasContext: context,
-                viewport: viewport,
-            }).promise;
-        }
-    } catch (e) {
-        console.error("Render Error:", e);
-    }
+  const zoomState = useStore({
+    scale: 1.0,     
+    baseScale: 1.0, 
+    startDist: 0    
   });
 
-  const changePage = $((newPage: number) => {
-    if (newPage >= 1 && newPage <= totalPages.value) {
-        currentPage.value = newPage;
-        renderPage(newPage);
-        if(containerRef.value) containerRef.value.scrollTop = 0;
-    }
-  });
-
-  // --- FIXED PINCH LOGIC ---
   const handleTouchStart = $((e: TouchEvent) => {
-    if (e.touches.length === 2 && canvasRef.value && containerRef.value) {
-      const t1 = e.touches[0];
-      const t2 = e.touches[1];
-      
-      // Calculate initial distance
-      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-      touchStartDist.value = dist;
-      
-      // Capture current size
-      const rect = canvasRef.value.getBoundingClientRect();
-      startWidth.value = rect.width;
-      startHeight.value = rect.height;
-      
-      // Store initial scroll position
-      scrollAtPinchStart.left = containerRef.value.scrollLeft;
-      scrollAtPinchStart.top = containerRef.value.scrollTop;
-      
-      // Calculate pinch center relative to container's content (including scroll)
-      const containerRect = containerRef.value.getBoundingClientRect();
-      pinchCenter.x = ((t1.clientX + t2.clientX) / 2) - containerRect.left + scrollAtPinchStart.left;
-      pinchCenter.y = ((t1.clientY + t2.clientY) / 2) - containerRect.top + scrollAtPinchStart.top;
+    if (e.touches.length === 2) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      zoomState.startDist = dist;
+      zoomState.baseScale = zoomState.scale;
     }
   });
 
   const handleTouchMove = $((e: TouchEvent) => {
-    // 1 Finger: Let browser handle Pan/Scroll naturally
-    if (e.touches.length === 1) return;
-
-    // 2 Fingers: Handle Zoom manually
-    if (e.touches.length === 2 && canvasRef.value && containerRef.value) {
-      e.preventDefault();
-
-      const t1 = e.touches[0];
-      const t2 = e.touches[1];
-      const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-
-      if (touchStartDist.value > 0) {
-        const scaleFactor = currentDist / touchStartDist.value;
-        
-        // Calculate new dimensions
-        let newWidth = startWidth.value * scaleFactor;
-        let newHeight = startHeight.value * scaleFactor;
-
-        // Limit Zoom Out
-        if (newWidth < basePageWidth.value) {
-             newWidth = basePageWidth.value;
-             newHeight = (basePageWidth.value / startWidth.value) * startHeight.value;
-        }
-        // Limit Zoom In (Max 5x)
-        if (newWidth > basePageWidth.value * 5) return;
-
-        // Apply new size
-        canvasRef.value.style.width = `${newWidth}px`;
-        canvasRef.value.style.height = `${newHeight}px`;
-
-        // --- FIXED SCROLL ADJUSTMENT ---
-        // Calculate how much the content has grown
-        const widthRatio = newWidth / startWidth.value;
-        const heightRatio = newHeight / startHeight.value;
-
-        // Adjust scroll to keep the pinch center point stable
-        const newScrollLeft = (pinchCenter.x * widthRatio) - (pinchCenter.x - scrollAtPinchStart.left);
-        const newScrollTop = (pinchCenter.y * heightRatio) - (pinchCenter.y - scrollAtPinchStart.top);
-
-        containerRef.value.scrollLeft = newScrollLeft;
-        containerRef.value.scrollTop = newScrollTop;
+    if (e.touches.length === 2) {
+      e.preventDefault(); 
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      if (zoomState.startDist > 0) {
+        const newScale = zoomState.baseScale * (dist / zoomState.startDist);
+        zoomState.scale = Math.min(Math.max(newScale, 0.5), 3.0);
       }
     }
   });
 
-  const handleTouchEnd = $((e: TouchEvent) => {
-    // Reset when pinch ends
-    if (e.touches.length < 2) {
-      touchStartDist.value = 0;
-    }
-  });
-
   useVisibleTask$(async () => {
-    if (!bookSignal.value?.pdfUrl || bookSignal.value.error) {
-        loadError.value = bookSignal.value?.error || "No PDF URL found";
-        isLoading.value = false;
-        return;
-    }
+    if (!bookSignal.value?.pdfUrl) return;
     try {
       const pdfjs = await import('pdfjs-dist');
       pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
       const loadingTask = pdfjs.getDocument(bookSignal.value.pdfUrl);
       const pdf = await loadingTask.promise;
-      pdfState.doc = noSerialize(pdf);
+      pdfDoc.value = noSerialize(pdf);
       totalPages.value = pdf.numPages;
-      await renderPage(currentPage.value);
+      setTimeout(() => {
+        if(bookSignal.value && bookSignal.value.initialPage > 1) {
+             document.getElementById(`page-${bookSignal.value.initialPage}`)?.scrollIntoView({ behavior: 'auto', block: 'start' });
+        }
+      }, 500);
       isLoading.value = false;
-    } catch (error: any) {
-      console.error("PDF Init Error:", error);
-      loadError.value = "Failed to load PDF.";
-      isLoading.value = false;
-    }
+    } catch { isLoading.value = false; }
   });
 
-  // Attach Listeners
   useVisibleTask$(({ cleanup }) => {
-    const el = containerRef.value;
-    if (!el) return;
-
-    el.addEventListener('touchstart', handleTouchStart, { passive: false });
+    if (!mainContainerRef.value) return;
+    containerWidth.value = mainContainerRef.value.clientWidth;
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) containerWidth.value = entry.contentRect.width;
+    });
+    resizeObserver.observe(mainContainerRef.value);
+    
+    const el = mainContainerRef.value;
+    el.addEventListener('touchstart', handleTouchStart, { passive: true });
     el.addEventListener('touchmove', handleTouchMove, { passive: false });
-    el.addEventListener('touchend', handleTouchEnd, { passive: false });
     
     cleanup(() => {
+        resizeObserver.disconnect();
         el.removeEventListener('touchstart', handleTouchStart);
         el.removeEventListener('touchmove', handleTouchMove);
-        el.removeEventListener('touchend', handleTouchEnd);
     });
   });
 
-  if (loadError.value) return <div>Error: {loadError.value}</div>;
+  const handlePageVisible = $((num: number) => { 
+    if (num >= 1) currentPage.value = num; 
+  });
 
   return (
-    <div class="h-[100dvh] flex flex-col bg-slate-900 overflow-hidden">
-      {/* HEADER */}
-      <div class="h-14 bg-slate-800 border-b border-slate-700 flex items-center justify-between px-3 shrink-0 z-20 shadow-md">
-        <Link href="/" class="text-white text-lg">⬅</Link>
-        <h2 class="text-white text-sm font-bold">{bookSignal.value?.title}</h2>
-        <div class="flex gap-2">
-            <button onClick$={() => changePage(currentPage.value - 1)} class="text-white px-2">⬅</button>
-            <Form action={saveAction}>
-                <input type="hidden" name="bookId" value={bookSignal.value?.id} />
-                <input type="hidden" name="page" value={currentPage.value} />
-                <button class="bg-blue-600 px-2 rounded text-white text-xs py-1">Save</button>
-            </Form>
-            <button onClick$={() => changePage(currentPage.value + 1)} class="text-white px-2">➡</button>
-        </div>
+    <div class="h-[100dvh] flex flex-col bg-slate-900 overflow-hidden relative">
+      
+      {/* SCROLL CONTAINER */}
+      <div 
+        ref={mainContainerRef}
+        class="flex-grow w-full bg-slate-600 overflow-auto relative scroll-smooth"
+      >
+        {isLoading.value && <div class="text-white text-center mt-10">Loading...</div>}
+        
+        {!isLoading.value && pdfDoc.value && containerWidth.value > 0 && (
+            <div 
+                style={{
+                    // FIX: REMOVED minWidth: '100%' so it can shrink below viewport size
+                    width: `${zoomState.scale * 100}%`,
+                    transition: 'width 0.1s linear', 
+                    margin: '0 auto', // Keeps it centered when < 100%
+                    paddingBottom: '140px' 
+                }}
+            >
+                {Array.from({ length: totalPages.value }, (_, i) => i + 1).map((num) => (
+                    <div key={num} id={`page-${num}`} class="w-full">
+                        <PDFPage 
+                            pageNum={num} 
+                            doc={pdfDoc.value} 
+                            width={containerWidth.value * zoomState.scale} 
+                            onInView={handlePageVisible} 
+                        />
+                    </div>
+                ))}
+            </div>
+        )}
       </div>
 
-      {/* SCROLLABLE CONTAINER */}
-      <div 
-        ref={containerRef} 
-        class="flex-grow w-full bg-slate-600 overflow-auto relative"
-      >
-        <div class="min-h-full min-w-full flex p-2">
-             <canvas 
-               ref={canvasRef} 
-               style={{ margin: 'auto' }}
-               class="shadow-2xl bg-white block" 
-             />
+      {/* BOTTOM CONTROLS CONTAINER */}
+      <div class="fixed bottom-0 left-0 w-full bg-slate-800 border-t border-slate-700 z-30 flex flex-col shadow-2xl pb-6">
+        
+        {/* ROW 1: FULL WIDTH SAVE BUTTON */}
+        <button 
+            onClick$={() => saveAction.submit({ bookId: bookSignal.value?.id, page: currentPage.value })}
+            disabled={saveAction.isRunning}
+            class={`
+                w-full py-1 text-center font-bold text-lg uppercase tracking-wider
+                transition active:bg-blue-700
+                ${saveAction.isRunning ? 'bg-slate-700 text-slate-400' : 'bg-blue-600 text-white hover:bg-blue-500'}
+            `}
+        >
+            {saveAction.isRunning ? 'Saving Progress...' : 'BookMark'}
+        </button>
+
+        {/* ROW 2: Zoom Slider */}
+        <div class="flex items-center gap-4 px-4 py-2 bg-slate-900/50">
+            <span class="text-slate-400 text-xs font-mono w-10 text-right">
+                {Math.round(zoomState.scale * 100)}%
+            </span>
+            <input 
+                type="range" 
+                min="0.5" 
+                max="3.0" 
+                step="0.1"
+                value={zoomState.scale}
+                onInput$={(e) => {
+                    const val = parseFloat((e.target as HTMLInputElement).value);
+                    zoomState.scale = val;
+                }}
+                class="flex-grow h-2 bg-slate-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
+            />
+            <button 
+                onClick$={() => zoomState.scale = 1.0} 
+                class="text-xs text-slate-400 hover:text-white"
+            >
+                Reset
+            </button>
         </div>
+
       </div>
     </div>
   );
