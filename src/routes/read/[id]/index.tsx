@@ -130,7 +130,45 @@ export default component$(() => {
   const zoomState = useStore({
     scale: 1.0,     
     baseScale: 1.0, 
-    startDist: 0    
+    startDist: 0
+  });
+
+  // --- CENTER-ANCHORED ZOOM LOGIC ---
+  const updateZoom = $((newScale: number, centerX?: number, centerY?: number) => {
+     // 1. Clamp Scale (0.5x to 3.0x)
+     const clampedScale = Math.min(Math.max(newScale, 0.5), 3.0);
+     
+     // Optimization: Don't do heavy math if scale hasn't effectively changed
+     if (Math.abs(clampedScale - zoomState.scale) < 0.01) return;
+
+     const el = mainContainerRef.value;
+     if (!el) return;
+
+     const oldScale = zoomState.scale;
+     const ratio = clampedScale / oldScale;
+
+     // 2. Determine Anchor Point (Where are we zooming into?)
+     // If centerX/Y are provided (Pinch), use those.
+     // If not (Slider), use the exact center of the current viewport.
+     const rect = el.getBoundingClientRect();
+     const viewportCX = centerX !== undefined ? (centerX - rect.left) : (rect.width / 2);
+     const viewportCY = centerY !== undefined ? (centerY - rect.top) : (rect.height / 2);
+
+     // 3. Calculate Point in Document Space
+     // "Where is this point in the scrollable document right now?"
+     const docX = el.scrollLeft + viewportCX;
+     const docY = el.scrollTop + viewportCY;
+
+     // 4. Update State (Trigger Reactivity)
+     zoomState.scale = clampedScale;
+
+     // 5. Adjust Scroll Position
+     // The point (docX, docY) will move to (docX * ratio, docY * ratio) after the width change.
+     // We subtract viewportCX/Y to bring that point back to the same spot on the screen.
+     requestAnimationFrame(() => {
+        el.scrollLeft = (docX * ratio) - viewportCX;
+        el.scrollTop = (docY * ratio) - viewportCY;
+     });
   });
 
   const handleTouchStart = $((e: TouchEvent) => {
@@ -147,13 +185,21 @@ export default component$(() => {
   const handleTouchMove = $((e: TouchEvent) => {
     if (e.touches.length === 2) {
       e.preventDefault(); 
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
+      
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+
+      // Calculate Distance
+      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      
+      // Calculate Center Point of the Pinch (The "free will" point)
+      const midX = (t1.clientX + t2.clientX) / 2;
+      const midY = (t1.clientY + t2.clientY) / 2;
+
       if (zoomState.startDist > 0) {
         const newScale = zoomState.baseScale * (dist / zoomState.startDist);
-        zoomState.scale = Math.min(Math.max(newScale, 0.5), 3.0);
+        // Pass the midpoint so we zoom into exactly where the fingers are
+        updateZoom(newScale, midX, midY);
       }
     }
   });
@@ -164,15 +210,12 @@ export default component$(() => {
       const pdfjs = await import('pdfjs-dist');
       pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
       
-      // FIX 1: Pass a single object to getDocument
       const loadingTask = pdfjs.getDocument({ url: bookSignal.value.pdfUrl });
-      
       const pdf = await loadingTask.promise;
       pdfDoc.value = noSerialize(pdf);
       totalPages.value = pdf.numPages;
       
       setTimeout(() => {
-        // FIX 2: Added optional chaining and safe fallback
         const initialPage = bookSignal.value?.initialPage ?? 1;
         if(initialPage > 1) {
              document.getElementById(`page-${initialPage}`)?.scrollIntoView({ behavior: 'auto', block: 'start' });
@@ -211,7 +254,8 @@ export default component$(() => {
       {/* SCROLL CONTAINER */}
       <div 
         ref={mainContainerRef}
-        class="flex-grow w-full bg-slate-600 overflow-auto relative scroll-smooth"
+        // NOTE: removed 'scroll-smooth' to prevent fighting with the zoom math
+        class="flex-grow w-full bg-slate-600 overflow-auto relative"
       >
         {isLoading.value && <div class="text-white text-center mt-10">Loading...</div>}
         
@@ -219,7 +263,7 @@ export default component$(() => {
             <div 
                 style={{
                     width: `${zoomState.scale * 100}%`,
-                    transition: 'width 0.1s linear', 
+                    // NOTE: Removed transition on width to make scroll sync instant
                     margin: '0 auto', 
                     paddingBottom: '140px' 
                 }}
@@ -267,12 +311,12 @@ export default component$(() => {
                 value={zoomState.scale}
                 onInput$={(e) => {
                     const val = parseFloat((e.target as HTMLInputElement).value);
-                    zoomState.scale = val;
+                    updateZoom(val); // This will default to center-screen zoom
                 }}
                 class="flex-grow h-2 bg-slate-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
             />
             <button 
-                onClick$={() => zoomState.scale = 1.0} 
+                onClick$={() => updateZoom(1.0)} 
                 class="text-xs text-slate-400 hover:text-white"
             >
                 Reset
